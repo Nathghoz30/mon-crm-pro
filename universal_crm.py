@@ -13,11 +13,16 @@ from PIL import Image
 st.set_page_config(page_title="Universal CRM", page_icon="🗂️", layout="wide")
 
 # Initialisation Supabase
+# Assurez-vous d'avoir configuré .streamlit/secrets.toml
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except:
+        st.error("Secrets Supabase manquants. Vérifiez votre fichier .streamlit/secrets.toml")
+        st.stop()
 
 supabase = init_connection()
 
@@ -90,7 +95,7 @@ def merge_files_to_pdf(files_urls):
     output.seek(0)
     return output
 
-# --- INTERFACE ---
+# --- INTERFACE PRINCIPALE ---
 
 st.title("🗂️ Universal CRM & GED")
 
@@ -122,17 +127,11 @@ with tab1:
                 form_data = {}
                 uploaded_files_map = {} # Pour stocker les fichiers temporairement
                 
-                # Tri des champs par section pour affichage propre
-                # On suppose que les champs sont stockés dans une liste
-                
-                # --- LOGIQUE D'AFFICHAGE DU FORMULAIRE ---
-                # On groupe par "section" si vous en avez défini, sinon on affiche tout à la suite
-                # Ici simplifions : on itère sur la liste
-                
+                # --- GÉNÉRATION DU FORMULAIRE ---
                 for field in fields_config:
                     label = field['name']
                     ftype = field['type']
-                    # Gestion de l'astérisque visuel pour l'obligatoire
+                    # Indication visuelle si obligatoire
                     display_label = f"{label} *" if field.get('required') else label
                     
                     if ftype == "Texte Court":
@@ -150,8 +149,6 @@ with tab1:
                             infos = get_siret_info(siret_val)
                             if infos:
                                 st.success(f"Trouvé : {infos['nom']}")
-                                # Note : Pour pré-remplir les autres champs, il faudrait recharger la page ou utiliser session_state
-                                # Ici on stocke juste le SIRET pour l'exemple
                         form_data[label] = siret_val
                     elif ftype == "Fichier":
                         uploaded = st.file_uploader(display_label, accept_multiple_files=True)
@@ -167,11 +164,10 @@ with tab1:
                     errors = []
                     final_data = form_data.copy()
                     
-                    # 1. VALIDATION "OBLIGATOIRE"
+                    # 1. VALIDATION "OBLIGATOIRE À LA SAISIE"
                     for field in fields_config:
                         fname = field['name']
                         if field.get('required', False):
-                            # Vérification spécifique selon le type
                             val = final_data.get(fname)
                             
                             # Si c'est un fichier, on vérifie dans la map des uploads
@@ -179,7 +175,7 @@ with tab1:
                                 if not uploaded_files_map.get(fname):
                                     errors.append(f"Le champ '{fname}' est obligatoire (document manquant).")
                             # Pour les autres champs
-                            elif not val: # Check if empty string, None, etc.
+                            elif not val: 
                                 errors.append(f"Le champ '{fname}' est obligatoire.")
 
                     if errors:
@@ -205,7 +201,7 @@ with tab1:
                         # 3. SAUVEGARDE EN BDD
                         # Conversion des dates en string pour JSON
                         for k, v in final_data.items():
-                            if isinstance(v, (datetime, pd.Timestamp)): # Correction pour date
+                            if isinstance(v, (datetime, pd.Timestamp)):
                                 final_data[k] = v.isoformat()
 
                         supabase.table("records").insert({
@@ -309,6 +305,7 @@ with tab2:
 with tab3:
     st.header("⚙️ Configuration des Modèles")
     
+    # 1. CRÉATION ACTIVITÉ
     with st.expander("1. Créer une Activité (ex: Rénovation, Administratif)"):
         new_act_name = st.text_input("Nom de l'activité")
         if st.button("Créer Activité"):
@@ -322,7 +319,8 @@ with tab3:
 
     st.divider()
     
-    with st.expander("2. Créer un Modèle de Dossier", expanded=True):
+    # 2. CRÉATION MODÈLE
+    with st.expander("2. Créer un NOUVEAU Modèle de Dossier"):
         acts = supabase.table("activities").select("*").execute().data
         if acts:
             target_act = st.selectbox("Lier à l'activité", [a['name'] for a in acts])
@@ -332,7 +330,6 @@ with tab3:
             
             st.subheader("Définition des Champs")
             
-            # Gestion dynamique des champs via Session State
             if "fields_temp" not in st.session_state:
                 st.session_state.fields_temp = []
             
@@ -342,25 +339,23 @@ with tab3:
             f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier", "Oui/Non"])
             
             # --- LES OPTIONS DE VALIDATION ---
-            # Option 1 : Toujours visible
-            req_general = st.checkbox("Obligatoire", help="L'utilisateur ne pourra pas enregistrer le dossier si ce champ est vide.")
+            req_general = st.checkbox("Obligatoire à la saisie", help="Impossible d'enregistrer si vide.")
             
-            # Option 2 : Visible seulement si Fichier
             req_pdf = False
             if f_type == "Fichier":
-                req_pdf = st.checkbox("🔒 Requis pour la Fusion PDF", help="Bloque la génération du PDF final si ce fichier manque.")
+                req_pdf = st.checkbox("🔒 Requis pour la Fusion PDF", help="Bloque le téléchargement du PDF si manquant.")
             
             if c3.button("Ajouter ce champ"):
                 if f_name:
                     st.session_state.fields_temp.append({
                         "name": f_name,
                         "type": f_type,
-                        "required": req_general,        # Stockage de l'option 1
-                        "required_for_pdf": req_pdf     # Stockage de l'option 2
+                        "required": req_general,
+                        "required_for_pdf": req_pdf
                     })
                     st.rerun()
             
-            # Liste des champs actuels
+            # Liste des champs
             if st.session_state.fields_temp:
                 st.write("### Champs configurés :")
                 for i, f in enumerate(st.session_state.fields_temp):
@@ -386,3 +381,89 @@ with tab3:
                     st.error("Nom ou champs manquants.")
         else:
             st.warning("Créez d'abord une activité.")
+
+    st.divider()
+
+    # 3. GESTION DES MODÈLES EXISTANTS
+    with st.expander("3. Gérer les Modèles existants (Modifier / Supprimer)", expanded=False):
+        acts_manage = supabase.table("activities").select("*").execute().data
+        
+        if acts_manage:
+            c_filter1, c_filter2 = st.columns(2)
+            act_choice_manage = c_filter1.selectbox("Choisir l'Activité", [a['name'] for a in acts_manage], key="manage_act")
+            act_id_manage = next(a['id'] for a in acts_manage if a['name'] == act_choice_manage)
+            
+            cols_manage = supabase.table("collections").select("*").eq("activity_id", act_id_manage).execute().data
+            
+            if cols_manage:
+                col_choice_manage = c_filter2.selectbox("Choisir le Modèle à gérer", [c['name'] for c in cols_manage], key="manage_col")
+                selected_col_manage = next(c for c in cols_manage if c['name'] == col_choice_manage)
+                
+                st.markdown(f"### 🔧 Modification : {selected_col_manage['name']}")
+                
+                current_fields = selected_col_manage['fields']
+                updated_fields = []
+                has_changes = False
+                
+                st.info("Cochez/Décochez les options pour mettre à jour la configuration.")
+                
+                for idx, field in enumerate(current_fields):
+                    with st.container():
+                        c_name, c_type, c_opt1, c_opt2 = st.columns([3, 2, 2, 2])
+                        
+                        c_name.text(f"📄 {field['name']}")
+                        c_type.caption(f"Type : {field['type']}")
+                        
+                        # Modif : Obligatoire
+                        new_req = c_opt1.checkbox(
+                            "🔴 Obligatoire", 
+                            value=field.get('required', False), 
+                            key=f"manage_req_{selected_col_manage['id']}_{idx}"
+                        )
+                        
+                        # Modif : Bloquant PDF
+                        new_pdf = False
+                        if field['type'] == "Fichier":
+                            new_pdf = c_opt2.checkbox(
+                                "🔒 Bloquant PDF", 
+                                value=field.get('required_for_pdf', False), 
+                                key=f"manage_pdf_{selected_col_manage['id']}_{idx}"
+                            )
+                        else:
+                            c_opt2.empty()
+                        
+                        updated_field = field.copy()
+                        if new_req != field.get('required', False):
+                            updated_field['required'] = new_req
+                            has_changes = True
+                        
+                        if field['type'] == "Fichier":
+                            if new_pdf != field.get('required_for_pdf', False):
+                                updated_field['required_for_pdf'] = new_pdf
+                                has_changes = True
+                                
+                        updated_fields.append(updated_field)
+                        st.divider()
+
+                if st.button("💾 Enregistrer les modifications"):
+                    if has_changes:
+                        supabase.table("collections").update({"fields": updated_fields}).eq("id", selected_col_manage['id']).execute()
+                        st.success("Configuration mise à jour avec succès !")
+                        st.rerun()
+                    else:
+                        st.info("Aucune modification détectée.")
+
+                st.write("")
+                
+                # --- SUPPRESSION ---
+                with st.expander("🗑️ Zone de Danger (Suppression)"):
+                    st.warning(f"Attention : Supprimer le modèle '{selected_col_manage['name']}' effacera TOUS les dossiers qui y sont liés.")
+                    if st.button(f"❌ Supprimer définitivement '{selected_col_manage['name']}'"):
+                        try:
+                            supabase.table("collections").delete().eq("id", selected_col_manage['id']).execute()
+                            st.error("Modèle supprimé.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erreur lors de la suppression : {e}")
+            else:
+                st.warning("Aucun modèle trouvé pour cette activité.")
