@@ -13,7 +13,6 @@ from PIL import Image
 st.set_page_config(page_title="Universal CRM", page_icon="🗂️", layout="wide")
 
 # Initialisation Supabase
-# Assurez-vous d'avoir configuré .streamlit/secrets.toml
 @st.cache_resource
 def init_connection():
     try:
@@ -150,7 +149,7 @@ with tab1:
                             if infos:
                                 st.success(f"Trouvé : {infos['nom']}")
                         form_data[label] = siret_val
-                    elif ftype == "Fichier":
+                    elif ftype == "Fichier/Image":  # <--- TYPE MIS À JOUR ICI
                         uploaded = st.file_uploader(display_label, accept_multiple_files=True)
                         uploaded_files_map[label] = uploaded
                     elif ftype == "Oui/Non":
@@ -171,7 +170,7 @@ with tab1:
                             val = final_data.get(fname)
                             
                             # Si c'est un fichier, on vérifie dans la map des uploads
-                            if field['type'] == "Fichier":
+                            if field['type'] == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                                 if not uploaded_files_map.get(fname):
                                     errors.append(f"Le champ '{fname}' est obligatoire (document manquant).")
                             # Pour les autres champs
@@ -186,7 +185,7 @@ with tab1:
                         timestamp = int(datetime.now().timestamp())
                         
                         for field in fields_config:
-                            if field['type'] == "Fichier":
+                            if field['type'] == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                                 flist = uploaded_files_map.get(field['name'])
                                 urls = []
                                 if flist:
@@ -266,7 +265,7 @@ with tab2:
                         fname = field['name']
                         
                         # On ne s'intéresse qu'aux champs fichiers pour la fusion
-                        if field['type'] == "Fichier":
+                        if field['type'] == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                             existing_files = rec_data.get(fname, [])
                             
                             # Vérification du bloquage
@@ -336,13 +335,14 @@ with tab3:
             # Ajout d'un champ
             c1, c2, c3 = st.columns([3, 2, 1])
             f_name = c1.text_input("Nom du champ")
-            f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier", "Oui/Non"])
+            # --- LISTE DES TYPES MISE À JOUR ---
+            f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"])
             
             # --- LES OPTIONS DE VALIDATION ---
             req_general = st.checkbox("Obligatoire à la saisie", help="Impossible d'enregistrer si vide.")
             
             req_pdf = False
-            if f_type == "Fichier":
+            if f_type == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                 req_pdf = st.checkbox("🔒 Requis pour la Fusion PDF", help="Bloque le téléchargement du PDF si manquant.")
             
             if c3.button("Ajouter ce champ"):
@@ -423,7 +423,7 @@ with tab3:
                         
                         # Modif : Bloquant PDF
                         new_pdf = False
-                        if field['type'] == "Fichier":
+                        if field['type'] == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                             new_pdf = c_opt2.checkbox(
                                 "🔒 Bloquant PDF", 
                                 value=field.get('required_for_pdf', False), 
@@ -437,7 +437,7 @@ with tab3:
                             updated_field['required'] = new_req
                             has_changes = True
                         
-                        if field['type'] == "Fichier":
+                        if field['type'] == "Fichier/Image": # <--- TYPE MIS À JOUR ICI
                             if new_pdf != field.get('required_for_pdf', False):
                                 updated_field['required_for_pdf'] = new_pdf
                                 has_changes = True
