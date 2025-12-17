@@ -9,7 +9,7 @@ from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
 
-# Import Drag & Drop
+# Import Drag & Drop (Gestion d'erreur si pas installé)
 try:
     from streamlit_sortables import sort_items
 except ImportError:
@@ -136,9 +136,11 @@ with tab1:
                                 t_key = f"field_{selected_collection['id']}_{i}_{f_target['name']}"
                                 val_to_set = None
                                 
+                                # Filtres d'exclusion (Prénom, Contact...)
                                 if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant"]):
                                     continue 
                                 
+                                # Mapping Intelligent
                                 if any(x in t_name for x in ["société", "societe", "entreprise", "raison sociale", "etablissement"]):
                                     val_to_set = infos['NOM']
                                 elif "nom" in t_name and ("ent" in t_name or "soc" in t_name): 
@@ -167,6 +169,7 @@ with tab1:
                 uploaded_files_map = {} 
                 main_address_val = "" # Pour stocker l'adresse siège temporairement
                 
+                # Boucle avec index (i) pour garantir l'unicité des clés
                 for i, field in enumerate(fields_config):
                     label = field['name']
                     ftype = field['type']
@@ -174,7 +177,7 @@ with tab1:
                     display_label = f"{label} *" if required else label
                     widget_key = f"field_{selected_collection['id']}_{i}_{label}"
 
-                    # Initialisation
+                    # Initialisation sécurisée
                     if widget_key not in st.session_state:
                          pass
 
@@ -182,7 +185,7 @@ with tab1:
                     if ftype == "Section/Titre":
                         st.markdown(f"### {label}")
                         st.markdown("---")
-                        form_data[label] = "SECTION" # Marqueur
+                        form_data[label] = "SECTION"
 
                     elif ftype == "Texte Court":
                         val = st.text_input(display_label, key=widget_key)
@@ -192,14 +195,11 @@ with tab1:
                             main_address_val = val
 
                     elif ftype == "Adresse Travaux":
-                        # Case à cocher "Identique"
                         use_same = st.checkbox("Même adresse que le siège ?", key=f"chk_{widget_key}")
                         current_val = st.session_state.get(widget_key, "")
                         
                         if use_same and main_address_val:
                             current_val = main_address_val
-                            # On force la valeur visuelle si elle n'est pas déjà mise à jour par l'utilisateur
-                            # (Note: en Streamlit pur dans un form, c'est tricky, mais on pré-remplit)
                         
                         val = st.text_input(display_label, value=current_val, key=widget_key)
                         form_data[label] = val
@@ -218,7 +218,6 @@ with tab1:
                     elif ftype == "Oui/Non":
                         form_data[label] = st.checkbox(display_label, key=widget_key)
                     else:
-                        # Fallback
                         form_data[label] = st.text_input(display_label, key=widget_key)
 
                 st.markdown("---")
@@ -230,9 +229,7 @@ with tab1:
                     
                     for field in fields_config:
                         fname = field['name']
-                        # On ignore la validation pour les sections
-                        if field['type'] == "Section/Titre":
-                            continue
+                        if field['type'] == "Section/Titre": continue
 
                         if field.get('required', False):
                             val = final_data.get(fname)
@@ -276,81 +273,160 @@ with tab1:
                         st.rerun()
 
 # ==========================================
-# ONGLET 2 : GESTION
+# ONGLET 2 : GESTION & DASHBOARD (NEW)
 # ==========================================
 with tab2:
-    st.header("Gestion des Dossiers")
+    st.header("📂 Gestion des Dossiers")
+    
+    # --- 1. BARRE DE RECHERCHE ET FILTRES ---
     all_cols = supabase.table("collections").select("id, name, fields").execute().data
+    
     if all_cols:
-        filter_col = st.selectbox("Filtrer par Modèle", ["Tous"] + [c['name'] for c in all_cols])
+        c_filter1, c_filter2 = st.columns([1, 3])
+        filter_col = c_filter1.selectbox("📁 Filtrer par Modèle", ["Tous"] + [c['name'] for c in all_cols])
+        
         query = supabase.table("records").select("*, collections(name, fields)")
         if filter_col != "Tous":
             query = query.eq("collections.name", filter_col)
         records = query.execute().data
         
         if records:
-            df_display = []
+            # Préparation des données pour la liste de sélection
+            search_options = {}
             for r in records:
-                row = r['data'].copy()
-                row['ID'] = r['id']
-                row['Modèle'] = r['collections']['name']
-                row['Date'] = r['created_at'][:10]
-                # On nettoie les champs "SECTION" pour l'affichage tableau
-                clean_row = {k:v for k,v in row.items() if v != "SECTION"}
-                df_display.append(clean_row)
+                d = r['data']
+                label_parts = [f"#{r['id']}"]
+                
+                # Recherche intelligente du Nom/Société
+                found_name = False
+                for k, v in d.items():
+                    if "nom" in k.lower() or "société" in k.lower() or "client" in k.lower():
+                        if isinstance(v, str) and len(v) > 1:
+                            label_parts.append(v.upper())
+                            found_name = True
+                            break
+                if not found_name: label_parts.append("Sans Nom")
+                
+                # Recherche Ville
+                for k, v in d.items():
+                    if "ville" in k.lower() and isinstance(v, str):
+                        label_parts.append(f"({v})")
+                        break
+                
+                full_label = " - ".join(label_parts)
+                search_options[full_label] = r['id']
+
+            st.info(f"{len(records)} dossier(s) trouvé(s).")
+            selected_label = c_filter2.selectbox("🔍 Rechercher un dossier (tapez un nom, une ville...)", options=list(search_options.keys()))
             
-            st.dataframe(pd.DataFrame(df_display).set_index("ID"))
-            st.divider()
-            
-            selected_id = st.number_input("ID du dossier à gérer", min_value=0, step=1)
-            if selected_id in [r['id'] for r in records]:
+            if selected_label:
+                selected_id = search_options[selected_label]
+                
+                # Récupération du dossier unique
                 record = next(r for r in records if r['id'] == selected_id)
                 rec_data = record['data']
                 col_config = record['collections']['fields']
                 
-                st.subheader(f"Dossier #{selected_id}")
-                
-                # Affichage propre avec Sections
-                for field in col_config:
-                    if field['type'] == "Section/Titre":
-                        st.markdown(f"#### {field['name']}")
-                        st.markdown("---")
-                    else:
-                        val = rec_data.get(field['name'])
-                        if field['type'] == "Fichier/Image":
-                            if val:
-                                st.write(f"**{field['name']}**: {len(val)} fichiers")
-                            else:
-                                st.write(f"**{field['name']}**: Aucun fichier")
-                        else:
-                            st.write(f"**{field['name']}**: {val}")
+                st.markdown("---")
 
-                st.divider()
-                st.json(rec_data, expanded=False)
+                # --- 3. AFFICHAGE FICHE DÉTAILLÉE ---
+                st.markdown(f"## 🗂️ Dossier #{selected_id} <span style='font-size:0.6em; color:gray'>({record['collections']['name']})</span>", unsafe_allow_html=True)
                 
-                if st.button("📥 Télécharger PDF Complet"):
-                    blocking_errors = []
-                    files_to_merge = []
+                sub_tab1, sub_tab2, sub_tab3 = st.tabs(["📝 Informations", "📄 Documents & PDF", "🔧 Données Brutes"])
+                
+                # --- SOUS-ONGLET 1 : INFORMATIONS ---
+                with sub_tab1:
+                    current_cols = st.columns(2)
+                    col_index = 0
+                    
                     for field in col_config:
                         fname = field['name']
-                        if field['type'] == "Fichier/Image":
-                            existing = rec_data.get(fname, [])
-                            if field.get('required_for_pdf', False) and not existing:
-                                blocking_errors.append(f"❌ Document manquant : {fname}")
-                            if existing:
-                                files_to_merge.extend(existing)
+                        ftype = field['type']
+                        val = rec_data.get(fname, "")
+                        
+                        if ftype == "Section/Titre":
+                            st.markdown(f"### {fname}")
+                            st.markdown("---")
+                            current_cols = st.columns(2) # Reset colonnes
+                            col_index = 0
+                        
+                        elif ftype == "Fichier/Image":
+                            continue
+                            
+                        else:
+                            with current_cols[col_index % 2]:
+                                if ftype == "Adresse Travaux" or "adresse" in fname.lower():
+                                    st.text_input(f"📍 {fname}", value=val, disabled=True)
+                                elif ftype == "SIRET":
+                                    st.text_input(f"🏢 {fname}", value=val, disabled=True)
+                                elif ftype == "Oui/Non":
+                                    st.checkbox(fname, value=val, disabled=True)
+                                else:
+                                    st.text_input(fname, value=str(val) if val else "-", disabled=True)
+                            col_index += 1
 
-                    if blocking_errors:
-                        for err in blocking_errors:
-                            st.error(err)
-                    elif not files_to_merge:
-                        st.warning("Aucun fichier.")
+                # --- SOUS-ONGLET 2 : DOCUMENTS (GED) ---
+                with sub_tab2:
+                    st.write("### État des Documents")
+                    files_to_merge = []
+                    blocking_errors = []
+                    
+                    file_fields = [f for f in col_config if f['type'] == "Fichier/Image"]
+                    
+                    if not file_fields:
+                        st.info("Ce modèle ne contient aucun document.")
                     else:
-                        with st.spinner("Fusion..."):
-                            pdf_bytes = merge_files_to_pdf(files_to_merge)
-                            st.download_button("💾 Télécharger le PDF", pdf_bytes, f"Dossier_{selected_id}.pdf", "application/pdf")
+                        f_cols = st.columns(3)
+                        for i, field in enumerate(file_fields):
+                            fname = field['name']
+                            files = rec_data.get(fname, [])
+                            is_required_pdf = field.get('required_for_pdf', False)
+                            
+                            with f_cols[i % 3]:
+                                with st.container(border=True):
+                                    st.write(f"**{fname}**")
+                                    if files and len(files) > 0:
+                                        st.success(f"✅ {len(files)} fichier(s)")
+                                        files_to_merge.extend(files)
+                                        for idx, url in enumerate(files):
+                                            st.markdown(f"[Voir Fichier {idx+1}]({url})")
+                                    else:
+                                        if is_required_pdf:
+                                            st.error("❌ Manquant (Bloquant)")
+                                            blocking_errors.append(f"Document manquant : {fname}")
+                                        else:
+                                            st.warning("⚠️ Non fourni")
+
+                    st.divider()
+                    st.write("### 🖨️ Génération du Rapport")
+                    
+                    c_action1, c_action2 = st.columns([3, 1])
+                    c_action1.info("Cette action va fusionner tous les documents présents (Images et PDF) en un seul fichier.")
+                    
+                    if c_action2.button("📥 Télécharger le PDF Complet", type="primary", use_container_width=True):
+                        if blocking_errors:
+                            for err in blocking_errors:
+                                st.toast(err, icon="❌")
+                            st.error("Impossible de générer le PDF. Vérifiez les documents bloquants.")
+                        elif not files_to_merge:
+                            st.warning("Aucun fichier à fusionner.")
+                        else:
+                            with st.spinner("Fusion des documents en cours..."):
+                                pdf_bytes = merge_files_to_pdf(files_to_merge)
+                                st.download_button(
+                                    label="💾 Sauvegarder le PDF",
+                                    data=pdf_bytes,
+                                    file_name=f"Dossier_{selected_id}_Complet.pdf",
+                                    mime="application/pdf"
+                                )
+
+                # --- SOUS-ONGLET 3 : RAW DATA ---
+                with sub_tab3:
+                    st.caption("Données brutes pour débogage")
+                    st.json(rec_data)
+
         else:
-            st.info("Aucun dossier.")
+            st.warning("Aucun dossier trouvé dans la base de données.")
 
 # ==========================================
 # ONGLET 3 : CONFIGURATION (ADMIN)
@@ -380,12 +456,12 @@ with tab3:
             
             c1, c2, c3 = st.columns([3, 2, 1])
             f_name = c1.text_input("Nom Champ / Titre Section")
-            # AJOUT DES NOUVEAUX TYPES ICI
             f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image", "Oui/Non"])
             
             req = st.checkbox("Obligatoire (Saisie)")
             req_pdf = st.checkbox("Bloquant PDF") if f_type == "Fichier/Image" else False
             
+            # Key unique
             if c3.button("Ajouter", key="btn_add_creation"):
                 st.session_state.fields_temp.append({
                     "name": f_name, "type": f_type, "required": req, "required_for_pdf": req_pdf
@@ -397,6 +473,7 @@ with tab3:
                 for f in st.session_state.fields_temp:
                     st.text(f"- {f['name']} ({f['type']})")
                 
+                # Key unique
                 if st.button("Reset", key="btn_reset_creation"):
                     st.session_state.fields_temp = []
                     st.rerun()
@@ -478,9 +555,9 @@ with tab3:
                 with st.container():
                     c_add1, c_add2, c_add3 = st.columns([3, 2, 2])
                     new_f_name = c_add1.text_input("Nom", key="add_new_name")
-                    # AJOUT DES NOUVEAUX TYPES ICI AUSSI
                     new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image", "Oui/Non"], key="add_new_type")
                     
+                    # Key unique pour le bouton AJOUTER
                     if c_add3.button("Ajouter", key="btn_add_edition"):
                         if new_f_name:
                             new_field_obj = {
