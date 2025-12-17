@@ -131,16 +131,13 @@ with tab1:
                     if c_btn.button("🔍 Rechercher & Remplir"):
                         infos = get_siret_info(search_siret)
                         if infos:
-                            # Injection des données avec clé sécurisée par INDEX
-                            # On utilise enumerate(i) pour matcher parfaitement la boucle du formulaire
+                            # Injection des données
                             for i, f_target in enumerate(fields_config):
                                 t_name = f_target['name'].lower()
-                                # CLÉ SÉCURISÉE AVEC INDEX 'i'
                                 t_key = f"field_{selected_collection['id']}_{i}_{f_target['name']}"
                                 
                                 val_to_set = None
                                 
-                                # Filtres stricts
                                 if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant"]):
                                     continue 
                                 
@@ -160,7 +157,6 @@ with tab1:
                                     val_to_set = search_siret
 
                                 if val_to_set:
-                                    # Mise à jour sécurisée
                                     st.session_state[t_key] = val_to_set
                             
                             st.success(f"Données trouvées pour : {infos['NOM']}")
@@ -173,14 +169,12 @@ with tab1:
                 form_data = {}
                 uploaded_files_map = {} 
                 
-                # IMPORTANT : On utilise enumerate(i) pour garantir l'unicité des clés
                 for i, field in enumerate(fields_config):
                     label = field['name']
                     ftype = field['type']
                     required = field.get('required', False)
                     display_label = f"{label} *" if required else label
                     
-                    # CLÉ UNIQUE INFAILLIBLE : ID_Collection + Index_Boucle + Nom
                     widget_key = f"field_{selected_collection['id']}_{i}_{label}"
 
                     if widget_key not in st.session_state:
@@ -211,7 +205,6 @@ with tab1:
                     errors = []
                     final_data = form_data.copy()
                     
-                    # Validation
                     for field in fields_config:
                         fname = field['name']
                         if field.get('required', False):
@@ -250,7 +243,6 @@ with tab1:
                         
                         st.success("Dossier enregistré !")
                         
-                        # Nettoyage propre
                         for key in list(st.session_state.keys()):
                             if key.startswith(f"field_{selected_collection['id']}"):
                                 del st.session_state[key]
@@ -349,7 +341,8 @@ with tab3:
             req = st.checkbox("Obligatoire (Saisie)")
             req_pdf = st.checkbox("Bloquant PDF") if f_type == "Fichier/Image" else False
             
-            if c3.button("Ajouter"):
+            # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
+            if c3.button("Ajouter", key="btn_add_creation"):
                 st.session_state.fields_temp.append({
                     "name": f_name, "type": f_type, "required": req, "required_for_pdf": req_pdf
                 })
@@ -359,7 +352,9 @@ with tab3:
                 st.write("Aperçu :")
                 for f in st.session_state.fields_temp:
                     st.text(f"- {f['name']} ({f['type']})")
-                if st.button("Reset"):
+                
+                # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
+                if st.button("Reset", key="btn_reset_creation"):
                     st.session_state.fields_temp = []
                     st.rerun()
             
@@ -391,23 +386,18 @@ with tab3:
                 field_names = [f['name'] for f in original_fields]
                 sorted_names = sort_items(field_names)
                 
-                # Reconstruction liste
                 sorted_fields = []
                 for name in sorted_names:
                     obj = next((f for f in original_fields if f['name'] == name), None)
                     if obj: sorted_fields.append(obj)
                 
-                # --- B. MODIFICATION CHAMPS EXISTANTS ---
                 st.divider()
                 st.write("### 🔧 2. Options des champs")
                 
-                final_fields_config = []
+                fields_to_keep = [] 
                 has_changes = False
                 if sorted_names != field_names: has_changes = True
 
-                fields_to_keep = [] 
-                
-                # IMPORTANT : enumerate(i) pour les clés uniques aussi ici
                 for idx, field in enumerate(sorted_fields):
                     delete_key = f"del_{sel_col['id']}_{idx}"
                     
@@ -441,14 +431,14 @@ with tab3:
                         
                         st.divider()
 
-                # --- C. AJOUT DE NOUVEAU CHAMP ---
                 st.write("### ➕ 3. Ajouter un champ")
                 with st.container():
                     c_add1, c_add2, c_add3 = st.columns([3, 2, 2])
                     new_f_name = c_add1.text_input("Nom", key="add_new_name")
                     new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"], key="add_new_type")
                     
-                    if c_add3.button("Ajouter"):
+                    # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
+                    if c_add3.button("Ajouter", key="btn_add_edition"):
                         if new_f_name:
                             new_field_obj = {
                                 "name": new_f_name,
