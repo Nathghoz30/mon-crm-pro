@@ -131,11 +131,9 @@ with tab1:
                     if c_btn.button("🔍 Rechercher & Remplir"):
                         infos = get_siret_info(search_siret)
                         if infos:
-                            # Injection des données
                             for i, f_target in enumerate(fields_config):
                                 t_name = f_target['name'].lower()
                                 t_key = f"field_{selected_collection['id']}_{i}_{f_target['name']}"
-                                
                                 val_to_set = None
                                 
                                 if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant"]):
@@ -165,23 +163,47 @@ with tab1:
             
             # --- 2. LE FORMULAIRE DE SAISIE ---
             with st.form("new_record_form"):
-                st.subheader("Détails du dossier")
                 form_data = {}
                 uploaded_files_map = {} 
+                main_address_val = "" # Pour stocker l'adresse siège temporairement
                 
                 for i, field in enumerate(fields_config):
                     label = field['name']
                     ftype = field['type']
                     required = field.get('required', False)
                     display_label = f"{label} *" if required else label
-                    
                     widget_key = f"field_{selected_collection['id']}_{i}_{label}"
 
+                    # Initialisation
                     if widget_key not in st.session_state:
                          pass
 
-                    if ftype == "Texte Court":
-                        form_data[label] = st.text_input(display_label, key=widget_key)
+                    # --- RENDU SELON TYPE ---
+                    if ftype == "Section/Titre":
+                        st.markdown(f"### {label}")
+                        st.markdown("---")
+                        form_data[label] = "SECTION" # Marqueur
+
+                    elif ftype == "Texte Court":
+                        val = st.text_input(display_label, key=widget_key)
+                        form_data[label] = val
+                        # Capture "intelligente" de l'adresse principale
+                        if "adresse" in label.lower() and "travaux" not in label.lower():
+                            main_address_val = val
+
+                    elif ftype == "Adresse Travaux":
+                        # Case à cocher "Identique"
+                        use_same = st.checkbox("Même adresse que le siège ?", key=f"chk_{widget_key}")
+                        current_val = st.session_state.get(widget_key, "")
+                        
+                        if use_same and main_address_val:
+                            current_val = main_address_val
+                            # On force la valeur visuelle si elle n'est pas déjà mise à jour par l'utilisateur
+                            # (Note: en Streamlit pur dans un form, c'est tricky, mais on pré-remplit)
+                        
+                        val = st.text_input(display_label, value=current_val, key=widget_key)
+                        form_data[label] = val
+
                     elif ftype == "Texte Long":
                         form_data[label] = st.text_area(display_label, key=widget_key)
                     elif ftype == "Nombre":
@@ -196,6 +218,7 @@ with tab1:
                     elif ftype == "Oui/Non":
                         form_data[label] = st.checkbox(display_label, key=widget_key)
                     else:
+                        # Fallback
                         form_data[label] = st.text_input(display_label, key=widget_key)
 
                 st.markdown("---")
@@ -207,6 +230,10 @@ with tab1:
                     
                     for field in fields_config:
                         fname = field['name']
+                        # On ignore la validation pour les sections
+                        if field['type'] == "Section/Titre":
+                            continue
+
                         if field.get('required', False):
                             val = final_data.get(fname)
                             if field['type'] == "Fichier/Image":
@@ -242,11 +269,9 @@ with tab1:
                         }).execute()
                         
                         st.success("Dossier enregistré !")
-                        
                         for key in list(st.session_state.keys()):
                             if key.startswith(f"field_{selected_collection['id']}"):
                                 del st.session_state[key]
-                                
                         st.balloons()
                         st.rerun()
 
@@ -270,7 +295,9 @@ with tab2:
                 row['ID'] = r['id']
                 row['Modèle'] = r['collections']['name']
                 row['Date'] = r['created_at'][:10]
-                df_display.append(row)
+                # On nettoie les champs "SECTION" pour l'affichage tableau
+                clean_row = {k:v for k,v in row.items() if v != "SECTION"}
+                df_display.append(clean_row)
             
             st.dataframe(pd.DataFrame(df_display).set_index("ID"))
             st.divider()
@@ -282,6 +309,23 @@ with tab2:
                 col_config = record['collections']['fields']
                 
                 st.subheader(f"Dossier #{selected_id}")
+                
+                # Affichage propre avec Sections
+                for field in col_config:
+                    if field['type'] == "Section/Titre":
+                        st.markdown(f"#### {field['name']}")
+                        st.markdown("---")
+                    else:
+                        val = rec_data.get(field['name'])
+                        if field['type'] == "Fichier/Image":
+                            if val:
+                                st.write(f"**{field['name']}**: {len(val)} fichiers")
+                            else:
+                                st.write(f"**{field['name']}**: Aucun fichier")
+                        else:
+                            st.write(f"**{field['name']}**: {val}")
+
+                st.divider()
                 st.json(rec_data, expanded=False)
                 
                 if st.button("📥 Télécharger PDF Complet"):
@@ -335,13 +379,13 @@ with tab3:
                 st.session_state.fields_temp = []
             
             c1, c2, c3 = st.columns([3, 2, 1])
-            f_name = c1.text_input("Nom Champ")
-            f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"])
+            f_name = c1.text_input("Nom Champ / Titre Section")
+            # AJOUT DES NOUVEAUX TYPES ICI
+            f_type = c2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image", "Oui/Non"])
             
             req = st.checkbox("Obligatoire (Saisie)")
             req_pdf = st.checkbox("Bloquant PDF") if f_type == "Fichier/Image" else False
             
-            # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
             if c3.button("Ajouter", key="btn_add_creation"):
                 st.session_state.fields_temp.append({
                     "name": f_name, "type": f_type, "required": req, "required_for_pdf": req_pdf
@@ -353,7 +397,6 @@ with tab3:
                 for f in st.session_state.fields_temp:
                     st.text(f"- {f['name']} ({f['type']})")
                 
-                # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
                 if st.button("Reset", key="btn_reset_creation"):
                     st.session_state.fields_temp = []
                     st.rerun()
@@ -435,9 +478,9 @@ with tab3:
                 with st.container():
                     c_add1, c_add2, c_add3 = st.columns([3, 2, 2])
                     new_f_name = c_add1.text_input("Nom", key="add_new_name")
-                    new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"], key="add_new_type")
+                    # AJOUT DES NOUVEAUX TYPES ICI AUSSI
+                    new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image", "Oui/Non"], key="add_new_type")
                     
-                    # --- CORRECTION ICI : AJOUT KEY UNIQUE ---
                     if c_add3.button("Ajouter", key="btn_add_edition"):
                         if new_f_name:
                             new_field_obj = {
