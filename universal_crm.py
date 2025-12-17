@@ -9,7 +9,7 @@ from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
 
-# Import Drag & Drop (Gestion d'erreur si pas installé)
+# Import Drag & Drop
 try:
     from streamlit_sortables import sort_items
 except ImportError:
@@ -131,25 +131,23 @@ with tab1:
                     if c_btn.button("🔍 Rechercher & Remplir"):
                         infos = get_siret_info(search_siret)
                         if infos:
-                            # Injection des données
-                            for f_target in fields_config:
+                            # Injection des données avec clé sécurisée par INDEX
+                            # On utilise enumerate(i) pour matcher parfaitement la boucle du formulaire
+                            for i, f_target in enumerate(fields_config):
                                 t_name = f_target['name'].lower()
-                                t_key = f"field_{selected_collection['id']}_{f_target['name']}"
+                                # CLÉ SÉCURISÉE AVEC INDEX 'i'
+                                t_key = f"field_{selected_collection['id']}_{i}_{f_target['name']}"
                                 
-                                # --- LOGIQUE DE FILTRAGE STRICT ---
                                 val_to_set = None
                                 
-                                # Exclusion explicite
-                                if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant", "gerant"]):
-                                    continue # On saute ces champs
+                                # Filtres stricts
+                                if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant"]):
+                                    continue 
                                 
-                                # Mapping strict
-                                if any(x in t_name for x in ["société", "societe", "entreprise", "raison sociale", "etablissement", "structure"]):
+                                if any(x in t_name for x in ["société", "societe", "entreprise", "raison sociale", "etablissement"]):
                                     val_to_set = infos['NOM']
-                                # Cas spécial : "Nom" tout court est souvent le nom de famille. On l'évite sauf si "Nom Entreprise"
                                 elif "nom" in t_name and ("ent" in t_name or "soc" in t_name): 
                                     val_to_set = infos['NOM']
-                                    
                                 elif "adresse" in t_name or "rue" in t_name or "siège" in t_name:
                                     val_to_set = infos['ADRESSE']
                                 elif "ville" in t_name or "commune" in t_name:
@@ -162,6 +160,7 @@ with tab1:
                                     val_to_set = search_siret
 
                                 if val_to_set:
+                                    # Mise à jour sécurisée
                                     st.session_state[t_key] = val_to_set
                             
                             st.success(f"Données trouvées pour : {infos['NOM']}")
@@ -174,13 +173,18 @@ with tab1:
                 form_data = {}
                 uploaded_files_map = {} 
                 
-                for field in fields_config:
+                # IMPORTANT : On utilise enumerate(i) pour garantir l'unicité des clés
+                for i, field in enumerate(fields_config):
                     label = field['name']
                     ftype = field['type']
                     required = field.get('required', False)
                     display_label = f"{label} *" if required else label
                     
-                    widget_key = f"field_{selected_collection['id']}_{label}"
+                    # CLÉ UNIQUE INFAILLIBLE : ID_Collection + Index_Boucle + Nom
+                    widget_key = f"field_{selected_collection['id']}_{i}_{label}"
+
+                    if widget_key not in st.session_state:
+                         pass
 
                     if ftype == "Texte Court":
                         form_data[label] = st.text_input(display_label, key=widget_key)
@@ -245,9 +249,12 @@ with tab1:
                         }).execute()
                         
                         st.success("Dossier enregistré !")
+                        
+                        # Nettoyage propre
                         for key in list(st.session_state.keys()):
                             if key.startswith(f"field_{selected_collection['id']}"):
                                 del st.session_state[key]
+                                
                         st.balloons()
                         st.rerun()
 
@@ -379,7 +386,6 @@ with tab3:
                 col_choice_m = c_f2.selectbox("Modèle", [c['name'] for c in cols_m], key="m_col")
                 sel_col = next(c for c in cols_m if c['name'] == col_choice_m)
                 
-                # --- A. REORGANISATION (DRAG & DROP) ---
                 st.write("### ↕️ 1. Organisation")
                 original_fields = sel_col['fields']
                 field_names = [f['name'] for f in original_fields]
@@ -397,27 +403,22 @@ with tab3:
                 
                 final_fields_config = []
                 has_changes = False
-                if sorted_names != field_names: has_changes = True # Changement d'ordre détecté
+                if sorted_names != field_names: has_changes = True
 
-                fields_to_keep = [] # Pour gérer la suppression
+                fields_to_keep = [] 
                 
-                # On itère sur les champs triés pour afficher les options
+                # IMPORTANT : enumerate(i) pour les clés uniques aussi ici
                 for idx, field in enumerate(sorted_fields):
-                    # Clé unique pour suppression
                     delete_key = f"del_{sel_col['id']}_{idx}"
-                    
-                    # On affiche le champ s'il n'est pas marqué pour suppression dans l'UI (pas de state ici, on fait direct)
-                    # Astuce : on ajoute un bouton supprimer. Si cliqué, on ne l'ajoute pas à fields_to_keep.
                     
                     with st.container():
                         c_del, c_n, c_t, c_o1, c_o2 = st.columns([1, 3, 2, 2, 2])
                         
-                        # Bouton Supprimer
-                        is_deleted = c_del.checkbox("🗑️", key=delete_key, help="Cochez pour supprimer ce champ au prochain enregistrement")
+                        is_deleted = c_del.checkbox("🗑️", key=delete_key, help="Supprimer")
                         
                         if not is_deleted:
                             c_n.text(f"{field['name']}")
-                            c_t.caption(f"Type: {field['type']}") # TYPE EN LECTURE SEULE
+                            c_t.caption(f"Type: {field['type']}")
                             
                             new_req = c_o1.checkbox("Obligatoire", value=field.get('required', False), key=f"r_{sel_col['id']}_{idx}")
                             
@@ -425,7 +426,6 @@ with tab3:
                             if field['type'] == "Fichier/Image":
                                 new_pdf = c_o2.checkbox("Bloquant PDF", value=field.get('required_for_pdf', False), key=f"p_{sel_col['id']}_{idx}")
                             
-                            # Reconstruction objet
                             u_field = field.copy()
                             if new_req != field.get('required', False):
                                 u_field['required'] = new_req
@@ -436,19 +436,19 @@ with tab3:
                             
                             fields_to_keep.append(u_field)
                         else:
-                            has_changes = True # Une suppression est un changement
-                            st.caption(f"⚠️ Le champ '{field['name']}' sera supprimé.")
+                            has_changes = True 
+                            st.caption(f"⚠️ Sera supprimé.")
                         
                         st.divider()
 
                 # --- C. AJOUT DE NOUVEAU CHAMP ---
-                st.write("### ➕ 3. Ajouter un champ à ce modèle")
+                st.write("### ➕ 3. Ajouter un champ")
                 with st.container():
                     c_add1, c_add2, c_add3 = st.columns([3, 2, 2])
-                    new_f_name = c_add1.text_input("Nom du nouveau champ", key="add_new_name")
+                    new_f_name = c_add1.text_input("Nom", key="add_new_name")
                     new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"], key="add_new_type")
                     
-                    if c_add3.button("Ajouter ce champ"):
+                    if c_add3.button("Ajouter"):
                         if new_f_name:
                             new_field_obj = {
                                 "name": new_f_name,
@@ -458,24 +458,21 @@ with tab3:
                             }
                             fields_to_keep.append(new_field_obj)
                             has_changes = True
-                            # On force la sauvegarde immédiate pour l'ajout
                             supabase.table("collections").update({"fields": fields_to_keep}).eq("id", sel_col['id']).execute()
-                            st.success("Champ ajouté !")
+                            st.success("Ajouté !")
                             st.rerun()
 
-                # --- BOUTON ENREGISTRER GLOBAL ---
                 st.markdown("---")
-                if st.button("💾 Enregistrer TOUTES les modifications (Ordre, Options, Suppressions)"):
+                if st.button("💾 Enregistrer TOUT"):
                     if has_changes:
                         supabase.table("collections").update({"fields": fields_to_keep}).eq("id", sel_col['id']).execute()
-                        st.success("Modèle mis à jour !")
+                        st.success("Mis à jour !")
                         st.rerun()
                     else:
-                        st.info("Aucun changement détecté.")
+                        st.info("Aucun changement.")
                 
-                # Zone Danger Modèle
-                with st.expander("Zone Danger (Supprimer Modèle)"):
-                    if st.button("❌ Supprimer le Modèle entier"):
+                with st.expander("Zone Danger"):
+                    if st.button("❌ Supprimer le Modèle"):
                         supabase.table("collections").delete().eq("id", sel_col['id']).execute()
                         st.error("Modèle supprimé.")
                         st.rerun()
