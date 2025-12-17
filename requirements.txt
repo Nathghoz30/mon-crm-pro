@@ -1,0 +1,7 @@
+streamlit
+supabase
+pandas
+requests
+streamlit-sortables
+pypdf
+Pillow
