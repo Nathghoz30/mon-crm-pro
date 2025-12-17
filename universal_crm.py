@@ -9,7 +9,7 @@ from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
 
-# Import Drag & Drop
+# Import Drag & Drop (Gestion d'erreur si pas installé)
 try:
     from streamlit_sortables import sort_items
 except ImportError:
@@ -118,23 +118,70 @@ with tab1:
             selected_collection = next(c for c in collections if c['name'] == col_choice)
             fields_config = selected_collection['fields']
             
+            st.markdown("---")
+
+            # --- 1. ZONE DE PRÉ-REMPLISSAGE (AUTO-FILL) ---
+            # On vérifie si un champ SIRET existe pour afficher la barre de recherche AVANT le formulaire
+            has_siret = any(f['type'] == "SIRET" for f in fields_config)
+            
+            if has_siret:
+                with st.container():
+                    st.markdown("##### ⚡ Remplissage Rapide")
+                    c_search, c_btn = st.columns([3, 1])
+                    search_siret = c_search.text_input("Entrez le SIRET pour pré-remplir", placeholder="Ex: 123 456 789 00012", label_visibility="collapsed")
+                    
+                    if c_btn.button("🔍 Rechercher & Remplir"):
+                        infos = get_siret_info(search_siret)
+                        if infos:
+                            # Injection des données dans le session_state
+                            for f_target in fields_config:
+                                t_name = f_target['name'].lower()
+                                # Clé unique correspondant aux widgets du formulaire plus bas
+                                t_key = f"field_{selected_collection['id']}_{f_target['name']}"
+                                
+                                val_to_set = None
+                                if "nom" in t_name or "société" in t_name or "client" in t_name:
+                                    val_to_set = infos['NOM']
+                                elif "adresse" in t_name or "rue" in t_name:
+                                    val_to_set = infos['ADRESSE']
+                                elif "ville" in t_name:
+                                    val_to_set = infos['VILLE']
+                                elif "cp" in t_name or "postal" in t_name:
+                                    val_to_set = infos['CP']
+                                elif "tva" in t_name:
+                                    val_to_set = infos['TVA']
+                                elif f_target['type'] == "SIRET":
+                                    val_to_set = search_siret # On remet le SIRET dans le champ du formulaire
+
+                                # Mise à jour sécurisée du session_state
+                                if val_to_set:
+                                    st.session_state[t_key] = val_to_set
+                            
+                            st.success(f"Données trouvées pour : {infos['NOM']}")
+                        else:
+                            st.error("SIRET introuvable.")
+            
+            # --- 2. LE FORMULAIRE DE SAISIE ---
             with st.form("new_record_form"):
+                st.subheader("Détails du dossier")
                 form_data = {}
                 uploaded_files_map = {} 
                 
-                # --- GÉNÉRATION DU FORMULAIRE ---
                 for field in fields_config:
                     label = field['name']
                     ftype = field['type']
                     required = field.get('required', False)
                     display_label = f"{label} *" if required else label
                     
-                    # CLÉ UNIQUE POUR CHAQUE WIDGET
-                    # Cela permet de les cibler précisément depuis le code
+                    # CLÉ UNIQUE : C'est ce qui lie le widget au bouton de recherche plus haut
                     widget_key = f"field_{selected_collection['id']}_{label}"
 
+                    # Initialisation si clé absente (évite crash)
+                    if widget_key not in st.session_state:
+                         # On ne met rien par défaut, sauf si c'est un fichier ou bool
+                         pass
+
                     if ftype == "Texte Court":
-                        # On utilise st.session_state pour persister les valeurs auto-remplies
                         form_data[label] = st.text_input(display_label, key=widget_key)
                     
                     elif ftype == "Texte Long":
@@ -147,40 +194,8 @@ with tab1:
                         form_data[label] = st.date_input(display_label, value=None, key=widget_key)
                         
                     elif ftype == "SIRET":
-                        c1, c2 = st.columns([3, 1])
-                        siret_val = c1.text_input(display_label, key=f"siret_input_{label}")
-                        form_data[label] = siret_val # On sauvegarde la valeur du SIRET aussi
-                        
-                        # --- LOGIQUE INTELLIGENTE DE REMPLISSAGE ---
-                        if c2.form_submit_button("🔍 Auto-fill"):
-                            infos = get_siret_info(siret_val)
-                            
-                            if infos:
-                                # On parcourt tous les champs configurés pour voir si on peut les remplir
-                                for f_target in fields_config:
-                                    t_name = f_target['name'].lower()
-                                    t_key = f"field_{selected_collection['id']}_{f_target['name']}"
-                                    
-                                    # Mots-clés pour le mapping intelligent
-                                    if "nom" in t_name or "société" in t_name or "entreprise" in t_name:
-                                        st.session_state[t_key] = infos['NOM']
-                                    
-                                    elif "adresse" in t_name or "rue" in t_name or "voie" in t_name:
-                                        st.session_state[t_key] = infos['ADRESSE']
-                                        
-                                    elif "ville" in t_name or "commune" in t_name:
-                                        st.session_state[t_key] = infos['VILLE']
-                                        
-                                    elif "cp" in t_name or "postal" in t_name:
-                                        st.session_state[t_key] = infos['CP']
-                                        
-                                    elif "tva" in t_name:
-                                        st.session_state[t_key] = infos['TVA']
-                                
-                                st.success(f"Données trouvées pour {infos['NOM']} ! Rechargement...")
-                                st.rerun() # OBLIGATOIRE pour afficher les nouvelles valeurs
-                            else:
-                                st.error("SIRET introuvable.")
+                        # Champ SIRET à l'intérieur du formulaire (sera rempli par le haut)
+                        form_data[label] = st.text_input(display_label, key=widget_key)
                         
                     elif ftype == "Fichier/Image":
                         uploaded = st.file_uploader(display_label, accept_multiple_files=True, key=widget_key)
@@ -191,6 +206,7 @@ with tab1:
                     else:
                         form_data[label] = st.text_input(display_label, key=widget_key)
 
+                st.markdown("---")
                 # --- VALIDATION & SAUVEGARDE ---
                 submit = st.form_submit_button("💾 Enregistrer le Dossier")
                 
@@ -238,10 +254,12 @@ with tab1:
                         }).execute()
                         
                         st.success("Dossier enregistré !")
-                        # Nettoyage des champs après succès
-                        for key in st.session_state.keys():
-                            if key.startswith("field_"):
+                        
+                        # Nettoyage des champs après succès pour vider le formulaire
+                        for key in list(st.session_state.keys()):
+                            if key.startswith(f"field_{selected_collection['id']}"):
                                 del st.session_state[key]
+                                
                         st.balloons()
                         st.rerun()
 
@@ -270,7 +288,7 @@ with tab2:
             st.dataframe(pd.DataFrame(df_display).set_index("ID"))
             st.divider()
             
-            selected_id = st.number_input("ID du dossier", min_value=0, step=1)
+            selected_id = st.number_input("ID du dossier à gérer", min_value=0, step=1)
             if selected_id in [r['id'] for r in records]:
                 record = next(r for r in records if r['id'] == selected_id)
                 rec_data = record['data']
@@ -387,7 +405,6 @@ with tab3:
                 sorted_fields = []
                 for name in sorted_names:
                     # On retrouve l'objet complet qui correspond au nom
-                    # (Attention si doublons de noms, mais rare en CRM simple)
                     field_obj = next((f for f in original_fields if f['name'] == name), None)
                     if field_obj:
                         sorted_fields.append(field_obj)
@@ -396,8 +413,8 @@ with tab3:
                 st.write("### 🔧 Modifier les options")
                 
                 final_fields_config = []
-                has_changes = False # Pour détecter modif ordre ou options
-                
+                has_changes = False 
+
                 # On vérifie si l'ordre a changé
                 if sorted_names != field_names:
                     has_changes = True
