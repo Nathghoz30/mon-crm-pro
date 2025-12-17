@@ -45,7 +45,6 @@ def get_siret_info(siret):
             if data['results']:
                 ent = data['results'][0]
                 siege = ent.get('siege', {})
-                # Retourne un mapping standardisé
                 return {
                     "NOM": ent.get('nom_complet'),
                     "ADRESSE": siege.get('adresse'),
@@ -121,7 +120,6 @@ with tab1:
             st.markdown("---")
 
             # --- 1. ZONE DE PRÉ-REMPLISSAGE (AUTO-FILL) ---
-            # On vérifie si un champ SIRET existe pour afficher la barre de recherche AVANT le formulaire
             has_siret = any(f['type'] == "SIRET" for f in fields_config)
             
             if has_siret:
@@ -133,27 +131,36 @@ with tab1:
                     if c_btn.button("🔍 Rechercher & Remplir"):
                         infos = get_siret_info(search_siret)
                         if infos:
-                            # Injection des données dans le session_state
+                            # Injection des données
                             for f_target in fields_config:
                                 t_name = f_target['name'].lower()
-                                # Clé unique correspondant aux widgets du formulaire plus bas
                                 t_key = f"field_{selected_collection['id']}_{f_target['name']}"
                                 
+                                # --- LOGIQUE DE FILTRAGE STRICT ---
                                 val_to_set = None
-                                if "nom" in t_name or "société" in t_name or "client" in t_name:
+                                
+                                # Exclusion explicite
+                                if any(x in t_name for x in ["prénom", "prenom", "contact", "gérant", "gerant"]):
+                                    continue # On saute ces champs
+                                
+                                # Mapping strict
+                                if any(x in t_name for x in ["société", "societe", "entreprise", "raison sociale", "etablissement", "structure"]):
                                     val_to_set = infos['NOM']
-                                elif "adresse" in t_name or "rue" in t_name:
+                                # Cas spécial : "Nom" tout court est souvent le nom de famille. On l'évite sauf si "Nom Entreprise"
+                                elif "nom" in t_name and ("ent" in t_name or "soc" in t_name): 
+                                    val_to_set = infos['NOM']
+                                    
+                                elif "adresse" in t_name or "rue" in t_name or "siège" in t_name:
                                     val_to_set = infos['ADRESSE']
-                                elif "ville" in t_name:
+                                elif "ville" in t_name or "commune" in t_name:
                                     val_to_set = infos['VILLE']
                                 elif "cp" in t_name or "postal" in t_name:
                                     val_to_set = infos['CP']
                                 elif "tva" in t_name:
                                     val_to_set = infos['TVA']
                                 elif f_target['type'] == "SIRET":
-                                    val_to_set = search_siret # On remet le SIRET dans le champ du formulaire
+                                    val_to_set = search_siret
 
-                                # Mise à jour sécurisée du session_state
                                 if val_to_set:
                                     st.session_state[t_key] = val_to_set
                             
@@ -173,41 +180,27 @@ with tab1:
                     required = field.get('required', False)
                     display_label = f"{label} *" if required else label
                     
-                    # CLÉ UNIQUE : C'est ce qui lie le widget au bouton de recherche plus haut
                     widget_key = f"field_{selected_collection['id']}_{label}"
-
-                    # Initialisation si clé absente (évite crash)
-                    if widget_key not in st.session_state:
-                         # On ne met rien par défaut, sauf si c'est un fichier ou bool
-                         pass
 
                     if ftype == "Texte Court":
                         form_data[label] = st.text_input(display_label, key=widget_key)
-                    
                     elif ftype == "Texte Long":
                         form_data[label] = st.text_area(display_label, key=widget_key)
-                    
                     elif ftype == "Nombre":
                         form_data[label] = st.number_input(display_label, step=1.0, key=widget_key)
-                    
                     elif ftype == "Date":
                         form_data[label] = st.date_input(display_label, value=None, key=widget_key)
-                        
                     elif ftype == "SIRET":
-                        # Champ SIRET à l'intérieur du formulaire (sera rempli par le haut)
                         form_data[label] = st.text_input(display_label, key=widget_key)
-                        
                     elif ftype == "Fichier/Image":
                         uploaded = st.file_uploader(display_label, accept_multiple_files=True, key=widget_key)
                         uploaded_files_map[label] = uploaded
-                        
                     elif ftype == "Oui/Non":
                         form_data[label] = st.checkbox(display_label, key=widget_key)
                     else:
                         form_data[label] = st.text_input(display_label, key=widget_key)
 
                 st.markdown("---")
-                # --- VALIDATION & SAUVEGARDE ---
                 submit = st.form_submit_button("💾 Enregistrer le Dossier")
                 
                 if submit:
@@ -229,7 +222,6 @@ with tab1:
                         for e in errors:
                             st.error(e)
                     else:
-                        # Upload
                         timestamp = int(datetime.now().timestamp())
                         for field in fields_config:
                             if field['type'] == "Fichier/Image":
@@ -243,7 +235,6 @@ with tab1:
                                             urls.append(url)
                                 final_data[field['name']] = urls
 
-                        # Insert DB
                         for k, v in final_data.items():
                             if isinstance(v, (datetime, pd.Timestamp)):
                                 final_data[k] = v.isoformat()
@@ -254,12 +245,9 @@ with tab1:
                         }).execute()
                         
                         st.success("Dossier enregistré !")
-                        
-                        # Nettoyage des champs après succès pour vider le formulaire
                         for key in list(st.session_state.keys()):
                             if key.startswith(f"field_{selected_collection['id']}"):
                                 del st.session_state[key]
-                                
                         st.balloons()
                         st.rerun()
 
@@ -378,7 +366,7 @@ with tab3:
 
     st.divider()
 
-    # 3. GESTION (MODIF + DRAG & DROP)
+    # 3. GESTION COMPLETE
     with st.expander("3. Modifier / Réorganiser Modèles", expanded=True):
         acts_m = supabase.table("activities").select("*").execute().data
         if acts_m:
@@ -391,69 +379,103 @@ with tab3:
                 col_choice_m = c_f2.selectbox("Modèle", [c['name'] for c in cols_m], key="m_col")
                 sel_col = next(c for c in cols_m if c['name'] == col_choice_m)
                 
-                st.write("### ↕️ Réorganiser l'ordre des champs")
-                st.info("Glissez-déposez les éléments ci-dessous pour changer l'ordre.")
-                
-                # --- DRAG & DROP ---
+                # --- A. REORGANISATION (DRAG & DROP) ---
+                st.write("### ↕️ 1. Organisation")
                 original_fields = sel_col['fields']
                 field_names = [f['name'] for f in original_fields]
-                
-                # Widget de tri
                 sorted_names = sort_items(field_names)
                 
-                # Reconstruction de la liste d'objets dans le nouvel ordre
+                # Reconstruction liste
                 sorted_fields = []
                 for name in sorted_names:
-                    # On retrouve l'objet complet qui correspond au nom
-                    field_obj = next((f for f in original_fields if f['name'] == name), None)
-                    if field_obj:
-                        sorted_fields.append(field_obj)
+                    obj = next((f for f in original_fields if f['name'] == name), None)
+                    if obj: sorted_fields.append(obj)
                 
+                # --- B. MODIFICATION CHAMPS EXISTANTS ---
                 st.divider()
-                st.write("### 🔧 Modifier les options")
+                st.write("### 🔧 2. Options des champs")
                 
                 final_fields_config = []
-                has_changes = False 
+                has_changes = False
+                if sorted_names != field_names: has_changes = True # Changement d'ordre détecté
 
-                # On vérifie si l'ordre a changé
-                if sorted_names != field_names:
-                    has_changes = True
-
+                fields_to_keep = [] # Pour gérer la suppression
+                
+                # On itère sur les champs triés pour afficher les options
                 for idx, field in enumerate(sorted_fields):
+                    # Clé unique pour suppression
+                    delete_key = f"del_{sel_col['id']}_{idx}"
+                    
+                    # On affiche le champ s'il n'est pas marqué pour suppression dans l'UI (pas de state ici, on fait direct)
+                    # Astuce : on ajoute un bouton supprimer. Si cliqué, on ne l'ajoute pas à fields_to_keep.
+                    
                     with st.container():
-                        c_n, c_t, c_o1, c_o2 = st.columns([3, 2, 2, 2])
-                        c_n.text(f"📄 {field['name']}")
-                        c_t.caption(field['type'])
+                        c_del, c_n, c_t, c_o1, c_o2 = st.columns([1, 3, 2, 2, 2])
                         
-                        new_req = c_o1.checkbox("🔴 Obligatoire", value=field.get('required', False), key=f"r_{sel_col['id']}_{idx}")
+                        # Bouton Supprimer
+                        is_deleted = c_del.checkbox("🗑️", key=delete_key, help="Cochez pour supprimer ce champ au prochain enregistrement")
                         
-                        new_pdf = False
-                        if field['type'] == "Fichier/Image":
-                            new_pdf = c_o2.checkbox("🔒 Bloquant PDF", value=field.get('required_for_pdf', False), key=f"p_{sel_col['id']}_{idx}")
-                        
-                        # Update logic
-                        u_field = field.copy()
-                        if new_req != field.get('required', False):
-                            u_field['required'] = new_req
-                            has_changes = True
-                        if field['type'] == "Fichier/Image":
-                            if new_pdf != field.get('required_for_pdf', False):
+                        if not is_deleted:
+                            c_n.text(f"{field['name']}")
+                            c_t.caption(f"Type: {field['type']}") # TYPE EN LECTURE SEULE
+                            
+                            new_req = c_o1.checkbox("Obligatoire", value=field.get('required', False), key=f"r_{sel_col['id']}_{idx}")
+                            
+                            new_pdf = False
+                            if field['type'] == "Fichier/Image":
+                                new_pdf = c_o2.checkbox("Bloquant PDF", value=field.get('required_for_pdf', False), key=f"p_{sel_col['id']}_{idx}")
+                            
+                            # Reconstruction objet
+                            u_field = field.copy()
+                            if new_req != field.get('required', False):
+                                u_field['required'] = new_req
+                                has_changes = True
+                            if field['type'] == "Fichier/Image" and new_pdf != field.get('required_for_pdf', False):
                                 u_field['required_for_pdf'] = new_pdf
                                 has_changes = True
+                            
+                            fields_to_keep.append(u_field)
+                        else:
+                            has_changes = True # Une suppression est un changement
+                            st.caption(f"⚠️ Le champ '{field['name']}' sera supprimé.")
                         
-                        final_fields_config.append(u_field)
                         st.divider()
 
-                if st.button("💾 Enregistrer modifications (Ordre & Options)"):
+                # --- C. AJOUT DE NOUVEAU CHAMP ---
+                st.write("### ➕ 3. Ajouter un champ à ce modèle")
+                with st.container():
+                    c_add1, c_add2, c_add3 = st.columns([3, 2, 2])
+                    new_f_name = c_add1.text_input("Nom du nouveau champ", key="add_new_name")
+                    new_f_type = c_add2.selectbox("Type", ["Texte Court", "Texte Long", "Nombre", "Date", "SIRET", "Fichier/Image", "Oui/Non"], key="add_new_type")
+                    
+                    if c_add3.button("Ajouter ce champ"):
+                        if new_f_name:
+                            new_field_obj = {
+                                "name": new_f_name,
+                                "type": new_f_type,
+                                "required": False,
+                                "required_for_pdf": False
+                            }
+                            fields_to_keep.append(new_field_obj)
+                            has_changes = True
+                            # On force la sauvegarde immédiate pour l'ajout
+                            supabase.table("collections").update({"fields": fields_to_keep}).eq("id", sel_col['id']).execute()
+                            st.success("Champ ajouté !")
+                            st.rerun()
+
+                # --- BOUTON ENREGISTRER GLOBAL ---
+                st.markdown("---")
+                if st.button("💾 Enregistrer TOUTES les modifications (Ordre, Options, Suppressions)"):
                     if has_changes:
-                        supabase.table("collections").update({"fields": final_fields_config}).eq("id", sel_col['id']).execute()
-                        st.success("Mise à jour réussie !")
+                        supabase.table("collections").update({"fields": fields_to_keep}).eq("id", sel_col['id']).execute()
+                        st.success("Modèle mis à jour !")
                         st.rerun()
                     else:
-                        st.info("Aucun changement.")
+                        st.info("Aucun changement détecté.")
                 
-                with st.expander("Zone Danger"):
-                    if st.button("❌ Supprimer Modèle"):
+                # Zone Danger Modèle
+                with st.expander("Zone Danger (Supprimer Modèle)"):
+                    if st.button("❌ Supprimer le Modèle entier"):
                         supabase.table("collections").delete().eq("id", sel_col['id']).execute()
-                        st.error("Supprimé.")
+                        st.error("Modèle supprimé.")
                         st.rerun()
