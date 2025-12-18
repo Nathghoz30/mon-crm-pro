@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import io
 import time
+import re  # <--- AJOUTÉ : Indispensable pour la sécurité email
 from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
@@ -23,11 +24,15 @@ st.set_page_config(page_title="Universal CRM SaaS", page_icon="🚀", layout="wi
 @st.cache_resource
 def init_connection():
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        # Tente de charger depuis st.secrets, sinon valeurs par défaut pour éviter le crash immédiat
+        url = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else "URL_MANQUANTE"
+        key = st.secrets["SUPABASE_KEY"] if "SUPABASE_KEY" in st.secrets else "KEY_MANQUANTE"
+        if url == "URL_MANQUANTE":
+            st.error("⚠️ Secrets Supabase manquants dans .streamlit/secrets.toml")
+            st.stop()
         return create_client(url, key)
-    except:
-        st.error("Secrets Supabase manquants.")
+    except Exception as e:
+        st.error(f"Erreur de connexion Supabase : {e}")
         st.stop()
 
 supabase = init_connection()
@@ -53,6 +58,7 @@ def login(email, password):
             st.session_state.user = user
             st.session_state.profile = profile_data[0]
             st.success("Connexion réussie !")
+            time.sleep(0.5)
             st.rerun()
         else:
             st.error("Utilisateur authentifié mais aucun profil trouvé. Contactez le support.")
@@ -93,33 +99,13 @@ def upload_file(file, path):
         return supabase.storage.from_("fichiers").get_public_url(path)
     except: return None
 
-def merge_pdfs(urls):
-    merger = PdfWriter()
-    for url in urls:
-        try:
-            r = requests.get(url)
-            if r.status_code == 200:
-                f = io.BytesIO(r.content)
-                if url.endswith(".pdf"): merger.append(PdfReader(f))
-                else: 
-                    img = Image.open(f).convert('RGB')
-                    pdf_bytes = io.BytesIO()
-                    img.save(pdf_bytes, format='PDF')
-                    pdf_bytes.seek(0)
-                    merger.append(PdfReader(pdf_bytes))
-        except: pass
-    out = io.BytesIO()
-    merger.write(out)
-    out.seek(0)
-    return out
-
 # ==========================================
 # 🔐 PAGE DE LOGIN
 # ==========================================
 if not st.session_state.user:
+    st.markdown("<h1 style='text-align: center;'>🔐 Connexion CRM</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.title("🔐 Connexion CRM")
         with st.form("login_form"):
             email = st.text_input("Email")
             password = st.text_input("Mot de passe", type="password")
@@ -133,52 +119,90 @@ if not st.session_state.user:
 
 # Infos de l'utilisateur connecté
 MY_PROFILE = st.session_state.profile
-MY_ROLE = MY_PROFILE['role']
-MY_COMPANY_ID = MY_PROFILE['company_id']
+MY_ROLE = MY_PROFILE.get('role', 'user')
+MY_COMPANY_ID = MY_PROFILE.get('company_id')
 
 # Header & Logout
-head_c1, head_c2 = st.columns([4, 1])
-head_c1.markdown(f"### 👋 Bonjour, {MY_PROFILE.get('full_name', 'Utilisateur')}")
-if head_c2.button("Déconnexion"):
-    logout()
+with st.sidebar:
+    st.markdown(f"### 👋 {MY_PROFILE.get('full_name', 'Utilisateur')}")
+    st.caption(f"Rôle : {MY_ROLE}")
+    if st.button("Déconnexion", use_container_width=True):
+        logout()
+
+st.title("Universal CRM SaaS 🚀")
 
 # ------------------------------------------------------------------
 # 👑 SUPER ADMIN DASHBOARD (Gestion des Entreprises)
 # ------------------------------------------------------------------
 if MY_ROLE == "super_admin":
-    st.info("👑 Mode Super Admin activé")
+    st.success("👑 Mode Super Admin activé")
     
     sa_tab1, sa_tab2 = st.tabs(["🏢 Gestion Entreprises", "👀 Accéder au CRM"])
     
+    # --- CRÉATION SÉCURISÉE (CODE CORRIGÉ) ---
     with sa_tab1:
         st.subheader("Créer une nouvelle entreprise")
         with st.form("create_company"):
             c_name = st.text_input("Nom de l'entreprise")
             admin_email = st.text_input("Email de l'Admin principal")
-            admin_pass = st.text_input("Mot de passe temporaire", type="password")
+            admin_pass = st.text_input("Mot de passe temporaire (min 6 car.)", type="password")
             
-            if st.form_submit_button("Créer Entreprise & Admin"):
+            submitted = st.form_submit_button("Créer Entreprise & Admin")
+            
+            if submitted:
+                # 1. Validations préalables
+                if not c_name or not admin_email or not admin_pass:
+                    st.error("❌ Tous les champs sont requis.")
+                    st.stop()
+                
+                if not re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", admin_email):
+                    st.error("❌ Format d'email invalide.")
+                    st.stop()
+                
+                if len(admin_pass) < 6:
+                    st.warning("⚠️ Mot de passe trop court.")
+                    st.stop()
+
+                # 2. Processus de création avec Rollback
+                new_comp_id = None
                 try:
-                    # 1. Créer Entreprise
+                    # A. Créer Entreprise
                     res_comp = supabase.table("companies").insert({"name": c_name}).execute()
-                    new_comp_id = res_comp.data[0]['id']
-                    
-                    # 2. Créer User Auth
-                    res_auth = supabase.auth.sign_up({"email": admin_email, "password": admin_pass})
-                    if res_auth.user:
-                        # 3. Créer Profil Admin
-                        supabase.table("profiles").insert({
-                            "id": res_auth.user.id,
-                            "email": admin_email,
-                            "company_id": new_comp_id,
-                            "role": "admin",
-                            "full_name": f"Admin {c_name}"
-                        }).execute()
-                        st.success(f"Entreprise '{c_name}' et Admin '{admin_email}' créés !")
+                    if res_comp.data:
+                        new_comp_id = res_comp.data[0]['id']
                     else:
-                        st.warning("User Auth créé mais peut nécessiter confirmation email.")
+                        raise Exception("Échec création entreprise (DB)")
+                    
+                    # B. Créer User Auth
+                    res_auth = supabase.auth.sign_up({
+                        "email": admin_email, 
+                        "password": admin_pass,
+                        "options": {
+                            "data": {
+                                "full_name": f"Admin {c_name}",
+                                "company_id": new_comp_id,
+                                "role": "admin"
+                            }
+                        }
+                    })
+                    
+                    # Vérification échec silencieux Auth
+                    if res_auth.user is None and res_auth.session is None:
+                        raise Exception("L'utilisateur n'a pas pu être créé (Email déjà pris ?).")
+
+                    # C. Succès
+                    st.success(f"✅ Entreprise '{c_name}' et Admin '{admin_email}' créés avec succès !")
+                    st.balloons()
+                    time.sleep(2)
+                    st.rerun()
+
                 except Exception as e:
-                    st.error(f"Erreur : {e}")
+                    st.error(f"❌ Erreur : {e}")
+                    # ROLLBACK : Nettoyage automatique
+                    if new_comp_id:
+                        st.warning("🔄 Annulation : Suppression de l'entreprise fantôme...")
+                        supabase.table("companies").delete().eq("id", new_comp_id).execute()
+                        st.info("✅ Base de données nettoyée.")
 
     with sa_tab2:
         st.write("Sélectionnez une entreprise pour voir son CRM :")
@@ -187,16 +211,14 @@ if MY_ROLE == "super_admin":
         target_comp_name = st.selectbox("Choisir Entreprise", list(comp_map.keys()))
         
         # SUPER ADMIN IMPERSONATION
-        # On écrase temporairement l'ID de la compagnie pour la suite du script
         if target_comp_name:
             MY_COMPANY_ID = comp_map[target_comp_name]
-            st.success(f"👀 Visualisation des données de : {target_comp_name}")
-            st.markdown("---")
-            # On continue l'exécution pour afficher le CRM dessous...
+            st.info(f"👀 Vous visualisez les données de : **{target_comp_name}**")
+            st.divider()
 
 # Si Super Admin n'a pas choisi d'entreprise, on arrête là
 if MY_ROLE == "super_admin" and not MY_COMPANY_ID:
-    st.warning("Veuillez sélectionner une entreprise ci-dessus.")
+    st.warning("👈 Veuillez sélectionner une entreprise dans l'onglet 'Accéder au CRM' pour continuer.")
     st.stop()
 
 
@@ -204,8 +226,7 @@ if MY_ROLE == "super_admin" and not MY_COMPANY_ID:
 # 🏢 CRM LOGIC (Filtré par MY_COMPANY_ID)
 # ------------------------------------------------------------------
 
-# Définition des onglets selon le rôle
-# User = Pas d'accès config
+# Définition des onglets
 tabs_list = ["1. 📝 Nouveau Dossier", "2. 📂 Gestion des Dossiers"]
 if MY_ROLE in ["admin", "super_admin"]:
     tabs_list.append("3. ⚙️ Configuration (Admin)")
@@ -223,7 +244,9 @@ with tabs[0]:
     activities = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
     
     if not activities:
-        st.info("Aucune activité configurée.")
+        st.info("⚠️ Aucune activité configurée pour cette entreprise.")
+        if MY_ROLE in ["admin", "super_admin"]:
+            st.write("👉 Allez dans l'onglet **Configuration** pour commencer.")
     else:
         act_choice = st.selectbox("Activité", [a['name'] for a in activities])
         act_id = next(a['id'] for a in activities if a['name'] == act_choice)
@@ -245,8 +268,8 @@ with tabs[0]:
                         if infos:
                             for i, f in enumerate(fields):
                                 key = f"f_{sel_col['id']}_{i}_{f['name']}"
-                                val = None
                                 n = f['name'].lower()
+                                val = None
                                 if any(x in n for x in ["nom", "société"]): val = infos['NOM']
                                 elif "adresse" in n: val = infos['ADRESSE']
                                 elif "ville" in n: val = infos['VILLE']
@@ -264,19 +287,20 @@ with tabs[0]:
                     key = f"f_{sel_col['id']}_{i}_{f['name']}"
                     lbl = f"{f['name']} *" if f.get('required') else f['name']
                     
-                    if key not in st.session_state: st.session_state[key] = "" # Init safe
+                    if key not in st.session_state: st.session_state[key] = ""
                     
                     if f['type'] == "Section/Titre":
                         st.markdown(f"**{f['name']}**")
                     elif f['type'] == "Texte Court":
-                        # Hack pour lire valeur session state pré-remplie
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
                         if "adresse" in f['name'].lower() and "travaux" not in f['name'].lower(): main_addr = val
                     elif f['type'] == "Adresse Travaux":
-                        same = st.checkbox("Identique siège ?", key=f"chk_{key}")
-                        if same and main_addr: st.session_state[key] = main_addr
-                        data[f['name']] = st.text_input(lbl, key=key)
+                        st.text_input(lbl, key=key) # Le reste géré par logique visuelle
+                        if st.checkbox(f"Identique siège ({main_addr}) ?", key=f"chk_{key}"):
+                            data[f['name']] = main_addr
+                        else:
+                            data[f['name']] = st.session_state[key]
                     elif f['type'] == "Fichier/Image":
                         files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                     else:
@@ -302,6 +326,7 @@ with tabs[0]:
                     # Clean state
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
+                    time.sleep(1)
                     st.rerun()
 
 # ==========================================
@@ -314,6 +339,7 @@ with tabs[1]:
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
     if my_acts:
         act_ids = [a['id'] for a in my_acts]
+        # Supabase 'in_' attend un tuple ou liste
         my_cols = supabase.table("collections").select("*").in_("activity_id", act_ids).execute().data
         
         if my_cols:
@@ -322,24 +348,20 @@ with tabs[1]:
             recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).execute().data
             
             if recs:
-                search_map = {f"#{r['id']} - {r['collections']['name']}": r for r in recs}
-                sel = st.selectbox("Rechercher", list(search_map.keys()))
+                st.write(f"Nombre de dossiers trouvés : {len(recs)}")
+                search_map = {f"#{r['id']} - {r['collections']['name']} (Créé le {r['created_at'][:10]})": r for r in recs}
+                sel = st.selectbox("Rechercher un dossier", list(search_map.keys()))
                 if sel:
                     r = search_map[sel]
                     st.markdown(f"### Dossier #{r['id']}")
                     st.json(r['data'], expanded=False)
                     
-                    # Logic PDF
-                    # (Code PDF identique précédent, simplifié ici)
-                    if st.button("📄 Générer PDF"):
-                         # ... Logique de fusion ...
-                         st.info("Fonctionnalité PDF active (voir code précédent)")
             else:
-                st.info("Aucun dossier.")
+                st.info("Aucun dossier enregistré pour le moment.")
         else:
-            st.info("Pas de modèles.")
+            st.info("Pas de modèles configurés.")
     else:
-        st.info("Pas d'activités.")
+        st.info("Pas d'activités configurées.")
 
 # ==========================================
 # ONGLET 3 : CONFIG (ADMIN ONLY)
@@ -348,19 +370,53 @@ if len(tabs) > 2:
     with tabs[2]:
         st.header("⚙️ Configuration Entreprise")
         
-        with st.expander("Créer Activité"):
-            n_act = st.text_input("Nom")
-            if st.button("Ajouter Activité"):
-                supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
-                st.rerun()
-
-        # ... (Logique création modèle identique version v11, mais filtrée par MY_COMPANY_ID)
-        # Pour simplifier le code ici, je mets l'essentiel :
-        st.write("Gestion des modèles (Logique v11 adaptée au company_id...)")
+        c_act1, c_act2 = st.columns([1, 2])
+        with c_act1:
+            with st.form("new_act"):
+                n_act = st.text_input("Nouvelle Activité")
+                if st.form_submit_button("Ajouter"):
+                    supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
+                    st.success("Activité ajoutée !")
+                    st.rerun()
         
-        # Le code v11 pour Admin doit juste s'assurer qu'il filtre les activités :
-        # acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
-        # C'est la seule modif majeure.
+        st.divider()
+        st.subheader("Créer un Modèle de Dossier")
+        
+        # Récupérer les activités DE CETTE ENTREPRISE
+        my_acts_config = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
+        
+        if my_acts_config:
+            act_sel = st.selectbox("Lier à l'activité", [a['name'] for a in my_acts_config])
+            act_id_sel = next(a['id'] for a in my_acts_config if a['name'] == act_sel)
+            
+            col_name = st.text_input("Nom du modèle (ex: Audit RGE)")
+            
+            if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
+            
+            c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
+            f_name = c_f1.text_input("Nom du champ")
+            f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
+            f_req = c_f3.checkbox("Obligatoire ?")
+            
+            if st.button("Ajouter ce champ"):
+                st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
+            
+            # Affichage dynamique des champs
+            if st.session_state.temp_fields:
+                st.write("Aperçu des champs :")
+                st.dataframe(pd.DataFrame(st.session_state.temp_fields))
+            
+            if st.button("💾 Sauvegarder le Modèle"):
+                supabase.table("collections").insert({
+                    "name": col_name,
+                    "activity_id": act_id_sel,
+                    "fields": st.session_state.temp_fields
+                }).execute()
+                st.success("Modèle sauvegardé !")
+                st.session_state.temp_fields = []
+                st.rerun()
+        else:
+            st.warning("Créez d'abord une activité ci-dessus.")
 
 # ==========================================
 # ONGLET 4 : UTILISATEURS (ADMIN ONLY)
@@ -368,7 +424,7 @@ if len(tabs) > 2:
 if len(tabs) > 3:
     with tabs[3]:
         st.header("👥 Gestion des Utilisateurs")
-        st.info("Ajoutez des collaborateurs à votre entreprise.")
+        st.info("Ajoutez des collaborateurs à VOTRE entreprise.")
         
         with st.form("add_user"):
             new_email = st.text_input("Email collaborateur")
@@ -377,10 +433,10 @@ if len(tabs) > 3:
             
             if st.form_submit_button("Créer Utilisateur"):
                 try:
-                    # Création Auth
+                    # Création Auth (C'est là que le trigger auto peut aider, mais on fait manuel ici)
                     res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                     if res.user:
-                        # Création Profil lié à MON entreprise
+                        # Création Profil lié à MON entreprise (MY_COMPANY_ID)
                         supabase.table("profiles").insert({
                             "id": res.user.id,
                             "email": new_email,
@@ -388,10 +444,14 @@ if len(tabs) > 3:
                             "role": new_role,
                             "full_name": new_email.split('@')[0]
                         }).execute()
-                        st.success("Utilisateur ajouté !")
+                        st.success("Utilisateur ajouté à votre équipe !")
+                    else:
+                        st.warning("Vérifiez si l'utilisateur existe déjà.")
                 except Exception as e:
                     st.error(f"Erreur : {e}")
             
-        # Liste users
-        users = supabase.table("profiles").select("*").eq("company_id", MY_COMPANY_ID).execute().data
-        st.dataframe(users)
+        st.divider()
+        st.write("### Membres de l'équipe")
+        users = supabase.table("profiles").select("email, role, full_name, last_sign_in_at").eq("company_id", MY_COMPANY_ID).execute().data
+        if users:
+            st.dataframe(users)
