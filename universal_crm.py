@@ -31,20 +31,24 @@ st.set_page_config(page_title="Universal CRM SaaS", page_icon="🚀", layout="wi
 @st.cache_resource
 def init_connection():
     try:
+        # Récupération sécurisée des clés
         url = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else "URL_MANQUANTE"
         key = st.secrets["SUPABASE_KEY"] if "SUPABASE_KEY" in st.secrets else "KEY_MANQUANTE"
+        
         if url == "URL_MANQUANTE":
-            st.error("⚠️ Secrets Supabase manquants dans .streamlit/secrets.toml")
+            st.error("⚠️ Les secrets Supabase (URL/KEY) sont introuvables.")
             st.stop()
+            
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Erreur de connexion Supabase : {e}")
+        st.error(f"Erreur technique connexion Supabase : {e}")
         st.stop()
 
 supabase = init_connection()
 
-# --- GESTION DES COOKIES (PERSISTANCE) ---
-@st.cache_resource(experimental_allow_widgets=True)
+# --- GESTION DES COOKIES (CORRECTION BUG TYPEERROR) ---
+# On utilise cache_resource simple, sans argument expérimental obsolète
+@st.cache_resource
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -57,35 +61,39 @@ if 'profile' not in st.session_state:
     st.session_state.profile = None
 
 # --- LOGIQUE DE RECONNEXION AUTO (Au chargement) ---
-# Si l'utilisateur n'est pas connecté en RAM, on vérifie les cookies
+# Cette partie s'exécute si l'utilisateur n'est PAS connecté en RAM
 if not st.session_state.user:
-    # On attend un peu que le cookie manager soit prêt
-    time.sleep(0.1) 
+    # On laisse le temps au composant cookie de charger
+    time.sleep(0.1)
+    
+    # Lecture du cookie de session
     refresh_token = cookie_manager.get("sb_refresh_token")
     
     if refresh_token:
         try:
-            # On tente de restaurer la session via Supabase
+            # On demande à Supabase de restaurer la session
             res = supabase.auth.refresh_session(refresh_token)
+            
             if res.user and res.session:
-                # 1. Mise à jour de l'user en session
+                # 1. Restauration utilisateur
                 st.session_state.user = res.user
                 
-                # 2. Récupération du profil
+                # 2. Restauration profil métier
                 profile_data = supabase.table("profiles").select("*").eq("id", res.user.id).execute().data
+                
                 if profile_data:
                     st.session_state.profile = profile_data[0]
                     
-                    # 3. On met à jour le cookie avec le nouveau token (rotation de sécurité)
-                    cookie_manager.set("sb_refresh_token", res.session.refresh_token, expires_at=datetime.now() + timedelta(days=30))
+                    # 3. Renouvellement du cookie (prolonge la session de 30 jours)
+                    cookie_manager.set("sb_refresh_token", res.session.refresh_token, 
+                                     expires_at=datetime.now() + timedelta(days=30))
                     
-                    st.toast("👋 Re-bonjour ! Session restaurée.")
+                    st.toast("👋 Session restaurée avec succès !")
                 else:
-                    # Profil introuvable (rare)
+                    # Cas rare : User auth existe mais pas de profil -> Nettoyage
                     cookie_manager.delete("sb_refresh_token")
-        except Exception as e:
-            # Si le token est expiré ou invalide, on nettoie
-            # st.warning(f"Session expirée : {e}")
+        except Exception:
+            # Si le token est invalide ou expiré, on le supprime silencieusement
             cookie_manager.delete("sb_refresh_token")
 
 
@@ -104,9 +112,10 @@ def login(email, password):
             st.session_state.user = user
             st.session_state.profile = profile_data[0]
             
-            # 3. SAUVEGARDE DANS LES COOKIES (30 jours)
+            # 3. CRÉATION DU COOKIE (Persistance 30 jours)
             if res.session:
-                cookie_manager.set("sb_refresh_token", res.session.refresh_token, expires_at=datetime.now() + timedelta(days=30))
+                cookie_manager.set("sb_refresh_token", res.session.refresh_token, 
+                                 expires_at=datetime.now() + timedelta(days=30))
             
             st.success("Connexion réussie !")
             time.sleep(0.5)
@@ -119,16 +128,18 @@ def login(email, password):
         st.error(f"Erreur de connexion : {e}")
 
 def logout():
-    # 1. Nettoyage Supabase
+    # 1. Déconnexion Supabase
     supabase.auth.sign_out()
     
-    # 2. Nettoyage Session
+    # 2. Nettoyage RAM
     st.session_state.user = None
     st.session_state.profile = None
     
-    # 3. Nettoyage Cookie
+    # 3. Suppression Cookie
     cookie_manager.delete("sb_refresh_token")
     
+    # Petit délai pour laisser le temps au cookie de s'effacer
+    time.sleep(0.5)
     st.rerun()
 
 def get_siret_info(siret):
@@ -182,11 +193,12 @@ MY_PROFILE = st.session_state.profile
 MY_ROLE = MY_PROFILE.get('role', 'user')
 MY_COMPANY_ID = MY_PROFILE.get('company_id')
 
-# Header & Logout
+# Sidebar : Header & Logout
 with st.sidebar:
     st.markdown(f"### 👋 {MY_PROFILE.get('full_name', 'Utilisateur')}")
     st.caption(f"Rôle : {MY_ROLE}")
-    if st.button("Déconnexion", use_container_width=True):
+    st.divider()
+    if st.button("Se déconnecter", use_container_width=True, type="primary"):
         logout()
 
 st.title("Universal CRM SaaS 🚀")
@@ -209,6 +221,7 @@ if MY_ROLE == "super_admin":
             submitted = st.form_submit_button("Créer Entreprise & Admin")
             
             if submitted:
+                # Validations
                 if not c_name or not admin_email or not admin_pass:
                     st.error("❌ Tous les champs sont requis.")
                     st.stop()
@@ -218,17 +231,19 @@ if MY_ROLE == "super_admin":
                     st.stop()
                 
                 if len(admin_pass) < 6:
-                    st.warning("⚠️ Mot de passe trop court.")
+                    st.warning("⚠️ Mot de passe trop court (min 6).")
                     st.stop()
 
                 new_comp_id = None
                 try:
+                    # 1. Création Entreprise
                     res_comp = supabase.table("companies").insert({"name": c_name}).execute()
                     if res_comp.data:
                         new_comp_id = res_comp.data[0]['id']
                     else:
                         raise Exception("Échec création entreprise (DB)")
                     
+                    # 2. Création User Auth
                     res_auth = supabase.auth.sign_up({
                         "email": admin_email, 
                         "password": admin_pass,
@@ -244,6 +259,7 @@ if MY_ROLE == "super_admin":
                     if res_auth.user is None and res_auth.session is None:
                         raise Exception("L'utilisateur n'a pas pu être créé (Email déjà pris ?).")
 
+                    # Succès
                     st.success(f"✅ Entreprise '{c_name}' créée !")
                     st.balloons()
                     time.sleep(2)
@@ -251,8 +267,9 @@ if MY_ROLE == "super_admin":
 
                 except Exception as e:
                     st.error(f"❌ Erreur : {e}")
+                    # Rollback
                     if new_comp_id:
-                        st.warning("🔄 Nettoyage...")
+                        st.warning("🔄 Nettoyage des données partielles...")
                         supabase.table("companies").delete().eq("id", new_comp_id).execute()
 
     with sa_tab2:
@@ -267,12 +284,12 @@ if MY_ROLE == "super_admin":
             st.divider()
 
 if MY_ROLE == "super_admin" and not MY_COMPANY_ID:
-    st.warning("👈 Sélectionnez une entreprise pour continuer.")
+    st.warning("👈 Veuillez sélectionner une entreprise dans l'onglet 'Accéder au CRM'.")
     st.stop()
 
 
 # ------------------------------------------------------------------
-# 🏢 CRM LOGIC
+# 🏢 CRM LOGIC (Filtré par MY_COMPANY_ID)
 # ------------------------------------------------------------------
 
 tabs_list = ["1. 📝 Nouveau Dossier", "2. 📂 Gestion des Dossiers"]
@@ -288,7 +305,7 @@ with tabs[0]:
     activities = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
     
     if not activities:
-        st.info("⚠️ Aucune activité configurée.")
+        st.info("⚠️ Aucune activité configurée. Allez dans l'onglet Configuration.")
     else:
         act_choice = st.selectbox("Activité", [a['name'] for a in activities])
         act_id = next(a['id'] for a in activities if a['name'] == act_choice)
@@ -317,7 +334,7 @@ with tabs[0]:
                                 elif "ville" in n: val = infos['VILLE']
                                 elif "cp" in n: val = infos['CP']
                                 if val: st.session_state[key] = val
-                            st.success("Trouvé !")
+                            st.success("Infos trouvées !")
 
             # Formulaire
             with st.form("add_rec"):
@@ -348,6 +365,7 @@ with tabs[0]:
                         data[f['name']] = st.text_input(lbl, key=key)
 
                 if st.form_submit_button("Enregistrer"):
+                    # Upload fichiers
                     for fname, flist in files_map.items():
                         urls = []
                         if flist:
@@ -363,6 +381,7 @@ with tabs[0]:
                         "created_by": st.session_state.user.id
                     }).execute()
                     st.success("Dossier créé !")
+                    # Reset
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
                     time.sleep(1)
