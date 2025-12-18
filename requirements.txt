@@ -5,3 +5,5 @@ requests
 streamlit-sortables
 pypdf
 Pillow
+
+extra-streamlit-components
