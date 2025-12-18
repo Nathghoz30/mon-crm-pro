@@ -31,7 +31,6 @@ st.set_page_config(page_title="Universal CRM SaaS", page_icon="🚀", layout="wi
 @st.cache_resource
 def init_connection():
     try:
-        # Récupération sécurisée des clés
         url = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else "URL_MANQUANTE"
         key = st.secrets["SUPABASE_KEY"] if "SUPABASE_KEY" in st.secrets else "KEY_MANQUANTE"
         
@@ -46,13 +45,10 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- GESTION DES COOKIES (CORRECTION BUG TYPEERROR) ---
-# On utilise cache_resource simple, sans argument expérimental obsolète
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# --- GESTION DES COOKIES (CORRIGÉE : PLUS DE CACHE) ---
+# On instancie directement pour éviter le warning "CachedWidgetWarning"
+# Cela règle le problème du pavé jaune.
+cookie_manager = stx.CookieManager()
 
 # --- GESTION ÉTAT SESSION ---
 if 'user' not in st.session_state:
@@ -60,59 +56,47 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
-# --- LOGIQUE DE RECONNEXION AUTO (Au chargement) ---
-# Cette partie s'exécute si l'utilisateur n'est PAS connecté en RAM
+# --- LOGIQUE DE RECONNEXION AUTO ---
 if not st.session_state.user:
-    # On laisse le temps au composant cookie de charger
+    # On laisse un micro-délai pour que le composant cookie se charge
     time.sleep(0.1)
     
-    # Lecture du cookie de session
+    # Lecture du cookie
     refresh_token = cookie_manager.get("sb_refresh_token")
     
     if refresh_token:
         try:
-            # On demande à Supabase de restaurer la session
             res = supabase.auth.refresh_session(refresh_token)
-            
             if res.user and res.session:
-                # 1. Restauration utilisateur
                 st.session_state.user = res.user
                 
-                # 2. Restauration profil métier
+                # Récupération profil
                 profile_data = supabase.table("profiles").select("*").eq("id", res.user.id).execute().data
                 
                 if profile_data:
                     st.session_state.profile = profile_data[0]
-                    
-                    # 3. Renouvellement du cookie (prolonge la session de 30 jours)
+                    # Renouvellement cookie
                     cookie_manager.set("sb_refresh_token", res.session.refresh_token, 
                                      expires_at=datetime.now() + timedelta(days=30))
-                    
-                    st.toast("👋 Session restaurée avec succès !")
+                    st.toast("Session restaurée.")
                 else:
-                    # Cas rare : User auth existe mais pas de profil -> Nettoyage
                     cookie_manager.delete("sb_refresh_token")
         except Exception:
-            # Si le token est invalide ou expiré, on le supprime silencieusement
             cookie_manager.delete("sb_refresh_token")
-
 
 # --- FONCTIONS UTILITAIRES ---
 
 def login(email, password):
     try:
-        # 1. Auth Supabase
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         user = res.user
         
-        # 2. Récupération du Profil
         profile_data = supabase.table("profiles").select("*").eq("id", user.id).execute().data
         
         if profile_data:
             st.session_state.user = user
             st.session_state.profile = profile_data[0]
             
-            # 3. CRÉATION DU COOKIE (Persistance 30 jours)
             if res.session:
                 cookie_manager.set("sb_refresh_token", res.session.refresh_token, 
                                  expires_at=datetime.now() + timedelta(days=30))
@@ -128,17 +112,10 @@ def login(email, password):
         st.error(f"Erreur de connexion : {e}")
 
 def logout():
-    # 1. Déconnexion Supabase
     supabase.auth.sign_out()
-    
-    # 2. Nettoyage RAM
     st.session_state.user = None
     st.session_state.profile = None
-    
-    # 3. Suppression Cookie
     cookie_manager.delete("sb_refresh_token")
-    
-    # Petit délai pour laisser le temps au cookie de s'effacer
     time.sleep(0.5)
     st.rerun()
 
@@ -188,12 +165,19 @@ if not st.session_state.user:
 # 🚀 APPLICATION PRINCIPALE
 # ==========================================
 
+# --- FILET DE SÉCURITÉ ANTI-CRASH (NOUVEAU) ---
+# Si l'user est connecté mais que le profil est perdu (cas de ton erreur rouge), on force le logout proprement.
+if st.session_state.profile is None:
+    st.warning("⚠️ Session incomplète. Reconnexion en cours...")
+    logout() # Cela va nettoyer et renvoyer au login sans faire crasher l'app
+    st.stop()
+
 # Infos de l'utilisateur connecté
 MY_PROFILE = st.session_state.profile
 MY_ROLE = MY_PROFILE.get('role', 'user')
 MY_COMPANY_ID = MY_PROFILE.get('company_id')
 
-# Sidebar : Header & Logout
+# Sidebar
 with st.sidebar:
     st.markdown(f"### 👋 {MY_PROFILE.get('full_name', 'Utilisateur')}")
     st.caption(f"Rôle : {MY_ROLE}")
@@ -221,7 +205,6 @@ if MY_ROLE == "super_admin":
             submitted = st.form_submit_button("Créer Entreprise & Admin")
             
             if submitted:
-                # Validations
                 if not c_name or not admin_email or not admin_pass:
                     st.error("❌ Tous les champs sont requis.")
                     st.stop()
@@ -231,19 +214,17 @@ if MY_ROLE == "super_admin":
                     st.stop()
                 
                 if len(admin_pass) < 6:
-                    st.warning("⚠️ Mot de passe trop court (min 6).")
+                    st.warning("⚠️ Mot de passe trop court.")
                     st.stop()
 
                 new_comp_id = None
                 try:
-                    # 1. Création Entreprise
                     res_comp = supabase.table("companies").insert({"name": c_name}).execute()
                     if res_comp.data:
                         new_comp_id = res_comp.data[0]['id']
                     else:
                         raise Exception("Échec création entreprise (DB)")
                     
-                    # 2. Création User Auth
                     res_auth = supabase.auth.sign_up({
                         "email": admin_email, 
                         "password": admin_pass,
@@ -259,7 +240,6 @@ if MY_ROLE == "super_admin":
                     if res_auth.user is None and res_auth.session is None:
                         raise Exception("L'utilisateur n'a pas pu être créé (Email déjà pris ?).")
 
-                    # Succès
                     st.success(f"✅ Entreprise '{c_name}' créée !")
                     st.balloons()
                     time.sleep(2)
@@ -267,9 +247,8 @@ if MY_ROLE == "super_admin":
 
                 except Exception as e:
                     st.error(f"❌ Erreur : {e}")
-                    # Rollback
                     if new_comp_id:
-                        st.warning("🔄 Nettoyage des données partielles...")
+                        st.warning("🔄 Nettoyage...")
                         supabase.table("companies").delete().eq("id", new_comp_id).execute()
 
     with sa_tab2:
@@ -317,7 +296,7 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # SIRET Auto-fill
+            # SIRET
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
@@ -365,7 +344,6 @@ with tabs[0]:
                         data[f['name']] = st.text_input(lbl, key=key)
 
                 if st.form_submit_button("Enregistrer"):
-                    # Upload fichiers
                     for fname, flist in files_map.items():
                         urls = []
                         if flist:
@@ -381,7 +359,6 @@ with tabs[0]:
                         "created_by": st.session_state.user.id
                     }).execute()
                     st.success("Dossier créé !")
-                    # Reset
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
                     time.sleep(1)
