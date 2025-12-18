@@ -45,9 +45,8 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- GESTION DES COOKIES (CORRIGÉE : PLUS DE CACHE) ---
-# On instancie directement pour éviter le warning "CachedWidgetWarning"
-# Cela règle le problème du pavé jaune.
+# --- GESTION DES COOKIES ---
+# Instanciation directe pour éviter le warning de cache obsolète
 cookie_manager = stx.CookieManager()
 
 # --- GESTION ÉTAT SESSION ---
@@ -58,10 +57,7 @@ if 'profile' not in st.session_state:
 
 # --- LOGIQUE DE RECONNEXION AUTO ---
 if not st.session_state.user:
-    # On laisse un micro-délai pour que le composant cookie se charge
-    time.sleep(0.1)
-    
-    # Lecture du cookie
+    time.sleep(0.1) # Délai technique pour le cookie manager
     refresh_token = cookie_manager.get("sb_refresh_token")
     
     if refresh_token:
@@ -75,11 +71,11 @@ if not st.session_state.user:
                 
                 if profile_data:
                     st.session_state.profile = profile_data[0]
-                    # Renouvellement cookie
                     cookie_manager.set("sb_refresh_token", res.session.refresh_token, 
                                      expires_at=datetime.now() + timedelta(days=30))
                     st.toast("Session restaurée.")
                 else:
+                    # Si Auth OK mais pas de profil, on nettoie
                     cookie_manager.delete("sb_refresh_token")
         except Exception:
             cookie_manager.delete("sb_refresh_token")
@@ -91,6 +87,7 @@ def login(email, password):
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         user = res.user
         
+        # On vérifie immédiatement si le profil existe
         profile_data = supabase.table("profiles").select("*").eq("id", user.id).execute().data
         
         if profile_data:
@@ -105,7 +102,7 @@ def login(email, password):
             time.sleep(0.5)
             st.rerun()
         else:
-            st.error("Utilisateur authentifié mais aucun profil trouvé.")
+            st.error("Utilisateur authentifié mais aucun profil trouvé (Table 'profiles' vide pour cet ID).")
             supabase.auth.sign_out()
             
     except Exception as e:
@@ -165,14 +162,13 @@ if not st.session_state.user:
 # 🚀 APPLICATION PRINCIPALE
 # ==========================================
 
-# --- FILET DE SÉCURITÉ ANTI-CRASH (NOUVEAU) ---
-# Si l'user est connecté mais que le profil est perdu (cas de ton erreur rouge), on force le logout proprement.
+# Sécurité : Si le profil a sauté en cours de route, on déconnecte proprement
 if st.session_state.profile is None:
-    st.warning("⚠️ Session incomplète. Reconnexion en cours...")
-    logout() # Cela va nettoyer et renvoyer au login sans faire crasher l'app
+    st.warning("⚠️ Session invalide. Reconnexion requise...")
+    logout()
     st.stop()
 
-# Infos de l'utilisateur connecté
+# Infos session
 MY_PROFILE = st.session_state.profile
 MY_ROLE = MY_PROFILE.get('role', 'user')
 MY_COMPANY_ID = MY_PROFILE.get('company_id')
@@ -205,50 +201,63 @@ if MY_ROLE == "super_admin":
             submitted = st.form_submit_button("Créer Entreprise & Admin")
             
             if submitted:
+                # 1. Validations
                 if not c_name or not admin_email or not admin_pass:
                     st.error("❌ Tous les champs sont requis.")
                     st.stop()
-                
                 if not re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", admin_email):
                     st.error("❌ Format d'email invalide.")
                     st.stop()
-                
                 if len(admin_pass) < 6:
                     st.warning("⚠️ Mot de passe trop court.")
                     st.stop()
 
                 new_comp_id = None
+                new_user_id = None
+                
                 try:
+                    # 2. Création Entreprise
                     res_comp = supabase.table("companies").insert({"name": c_name}).execute()
                     if res_comp.data:
                         new_comp_id = res_comp.data[0]['id']
                     else:
-                        raise Exception("Échec création entreprise (DB)")
+                        raise Exception("Impossible de créer l'entreprise.")
                     
+                    # 3. Création User Auth
                     res_auth = supabase.auth.sign_up({
                         "email": admin_email, 
                         "password": admin_pass,
                         "options": {
-                            "data": {
-                                "full_name": f"Admin {c_name}",
-                                "company_id": new_comp_id,
-                                "role": "admin"
-                            }
+                            "data": { "full_name": f"Admin {c_name}" }
                         }
                     })
                     
-                    if res_auth.user is None and res_auth.session is None:
-                        raise Exception("L'utilisateur n'a pas pu être créé (Email déjà pris ?).")
+                    if res_auth.user:
+                        new_user_id = res_auth.user.id
+                    else:
+                        raise Exception("Utilisateur Auth non créé.")
 
-                    st.success(f"✅ Entreprise '{c_name}' créée !")
+                    # 4. CRÉATION PROFIL (L'étape CRUCIALE qui manquait)
+                    # On insère manuellement dans la table public.profiles
+                    supabase.table("profiles").insert({
+                        "id": new_user_id,
+                        "email": admin_email,
+                        "company_id": new_comp_id,
+                        "role": "admin",
+                        "full_name": f"Admin {c_name}"
+                    }).execute()
+
+                    # Succès total
+                    st.success(f"✅ Entreprise '{c_name}' et Admin créés avec succès !")
                     st.balloons()
                     time.sleep(2)
                     st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ Erreur : {e}")
+                    # Rollback : On nettoie si ça a planté à moitié
                     if new_comp_id:
-                        st.warning("🔄 Nettoyage...")
+                        st.warning("🔄 Nettoyage de l'entreprise fantôme...")
                         supabase.table("companies").delete().eq("id", new_comp_id).execute()
 
     with sa_tab2:
@@ -263,7 +272,7 @@ if MY_ROLE == "super_admin":
             st.divider()
 
 if MY_ROLE == "super_admin" and not MY_COMPANY_ID:
-    st.warning("👈 Veuillez sélectionner une entreprise dans l'onglet 'Accéder au CRM'.")
+    st.warning("👈 Sélectionnez une entreprise dans l'onglet 'Accéder au CRM'.")
     st.stop()
 
 
@@ -296,7 +305,7 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # SIRET
+            # SIRET Auto-fill
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
@@ -315,7 +324,7 @@ with tabs[0]:
                                 if val: st.session_state[key] = val
                             st.success("Infos trouvées !")
 
-            # Formulaire
+            # Formulaire dynamique
             with st.form("add_rec"):
                 data = {}
                 files_map = {}
@@ -344,6 +353,7 @@ with tabs[0]:
                         data[f['name']] = st.text_input(lbl, key=key)
 
                 if st.form_submit_button("Enregistrer"):
+                    # Upload fichiers
                     for fname, flist in files_map.items():
                         urls = []
                         if flist:
@@ -359,6 +369,7 @@ with tabs[0]:
                         "created_by": st.session_state.user.id
                     }).execute()
                     st.success("Dossier créé !")
+                    # Reset
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
                     time.sleep(1)
@@ -440,6 +451,7 @@ if len(tabs) > 2:
 if len(tabs) > 3:
     with tabs[3]:
         st.header("👥 Utilisateurs")
+        st.info("Ajoutez des collaborateurs à VOTRE entreprise.")
         with st.form("add_user"):
             new_email = st.text_input("Email")
             new_pass = st.text_input("Mot de passe", type="password")
@@ -449,6 +461,7 @@ if len(tabs) > 3:
                 try:
                     res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                     if res.user:
+                        # INSERTION EXPLICTE DANS PROFILES
                         supabase.table("profiles").insert({
                             "id": res.user.id,
                             "email": new_email,
