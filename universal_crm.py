@@ -269,7 +269,7 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # --- AUTO FILL SIRET (LOGIQUE MOINS AGRESSIVE V9) ---
+            # --- AUTO FILL SIRET V10 (Protection Installation) ---
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
@@ -282,15 +282,19 @@ with tabs[0]:
                                 n = f['name'].lower()
                                 val = None
                                 
-                                # Logique stricte
+                                # 1. Raison Sociale
                                 if any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
                                     val = infos['NOM']
-                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention"]):
+                                # 2. Adresse (Exclusion stricte de 'installation')
+                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]):
                                     val = infos['ADRESSE']
-                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier"]):
+                                # 3. Ville
+                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]):
                                     val = infos['VILLE']
-                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier"]):
+                                # 4. CP
+                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]):
                                     val = infos['CP']
+                                # 5. TVA
                                 elif "tva" in n:
                                     val = infos['TVA']
                                 
@@ -316,6 +320,10 @@ with tabs[0]:
                     elif f['type'] == "Texte Court":
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
+                        # Capture intelligente de l'adresse principale même si type "Texte Court"
+                        n_lower = f['name'].lower()
+                        if any(x in n_lower for x in ["adresse", "siège", "kbis", "facturation"]) and not any(x in n_lower for x in ["travaux", "chantier", "installation"]):
+                            main_addr = val
                         
                     elif f['type'] == "Adresse":
                         val = st.text_input(lbl, key=key)
@@ -323,12 +331,12 @@ with tabs[0]:
                         main_addr = val 
                         
                     elif f['type'] == "Adresse Travaux":
-                        # CHECKBOX PLACÉE AVANT LE CHAMP POUR MISE À JOUR LIVE
+                        # CHECKBOX D'AUTO-COMPLÉTION
+                        # Fonctionne maintenant même si l'adresse source est un "Texte Court"
                         use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
                         if use_same and main_addr:
                             st.session_state[key] = main_addr
                         
-                        # Le champ texte prend la valeur du session_state qui vient d'être mis à jour
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
                             
