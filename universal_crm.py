@@ -269,7 +269,7 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # --- AUTO FILL SIRET (LOGIQUE AMÉLIORÉE) ---
+            # --- AUTO FILL SIRET (LOGIQUE MOINS AGRESSIVE V9) ---
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
@@ -282,16 +282,14 @@ with tabs[0]:
                                 n = f['name'].lower()
                                 val = None
                                 
-                                # Logique de mapping plus précise
+                                # Logique stricte
                                 if any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
-                                    val = infos['NOM'] # Priorité absolue pour le nom de la boite
-                                elif "nom" in n and "client" not in n and "contact" not in n and "prénom" not in n:
-                                    val = infos['NOM'] # Fallback si le champ s'appelle juste "Nom"
-                                elif any(x in n for x in ["adresse", "siège"]) and "travaux" not in n:
+                                    val = infos['NOM']
+                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention"]):
                                     val = infos['ADRESSE']
-                                elif "ville" in n:
+                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier"]):
                                     val = infos['VILLE']
-                                elif any(x in n for x in ["cp", "code postal"]):
+                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier"]):
                                     val = infos['CP']
                                 elif "tva" in n:
                                     val = infos['TVA']
@@ -309,7 +307,6 @@ with tabs[0]:
                     key = f"f_{sel_col['id']}_{i}_{f['name']}"
                     lbl = f"{f['name']} *" if f.get('required') else f['name']
                     
-                    # FIX CRITIQUE: Ne pas initialiser les Uploaders avec string vide
                     if f['type'] != "Fichier/Image" and key not in st.session_state:
                         st.session_state[key] = ""
                     
@@ -320,24 +317,25 @@ with tabs[0]:
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
                         
-                    elif f['type'] == "Adresse": # TYPE RESTAURÉ
+                    elif f['type'] == "Adresse":
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
-                        main_addr = val # On capture pour la logique "Identique"
+                        main_addr = val 
                         
                     elif f['type'] == "Adresse Travaux":
-                        st.text_input(lbl, key=key)
-                        # Logique adresse identique
-                        if st.checkbox(f"Identique siège ({main_addr}) ?", key=f"chk_{key}"):
-                            data[f['name']] = main_addr
-                        else:
-                            data[f['name']] = st.session_state[key]
+                        # CHECKBOX PLACÉE AVANT LE CHAMP POUR MISE À JOUR LIVE
+                        use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
+                        if use_same and main_addr:
+                            st.session_state[key] = main_addr
+                        
+                        # Le champ texte prend la valeur du session_state qui vient d'être mis à jour
+                        val = st.text_input(lbl, key=key)
+                        data[f['name']] = val
                             
                     elif f['type'] == "Fichier/Image":
-                        # Pas d'initialisation session_state ici, on laisse le widget gérer
                         files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                         
-                    else: # Fallback (Texte Long, Date, SIRET...)
+                    else: 
                         data[f['name']] = st.text_input(lbl, key=key)
 
                 if st.form_submit_button("Enregistrer"):
@@ -355,7 +353,6 @@ with tabs[0]:
                     }).execute()
                     
                     st.success("Dossier créé !")
-                    # Reset propre des champs texte uniquement
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
                     time.sleep(1)
@@ -414,7 +411,6 @@ if len(tabs) > 2:
             
             c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
             f_name = c_f1.text_input("Nom champ")
-            # LISTE DES TYPES MISE À JOUR (Adresse ajoutée)
             f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
             f_req = c_f3.checkbox("Obligatoire ?")
             
