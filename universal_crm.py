@@ -282,47 +282,56 @@ with tabs[0]:
                                 n = f['name'].lower()
                                 val = None
                                 
-                                # 0. SIRET
-                                if f['type'] == 'SIRET': val = siret_in
+                                # 0. SIRET (Le champ lui-même !)
+                                if f['type'] == 'SIRET':
+                                    val = siret_in
+                                
                                 # 1. Raison Sociale
-                                elif any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]): val = infos['NOM']
+                                elif any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
+                                    val = infos['NOM']
+                                
                                 # 2. Adresse
-                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]): val = infos['ADRESSE']
+                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]):
+                                    val = infos['ADRESSE']
+                                
                                 # 3. Ville
-                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]): val = infos['VILLE']
+                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]):
+                                    val = infos['VILLE']
+                                
                                 # 4. CP
-                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]): val = infos['CP']
+                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]):
+                                    val = infos['CP']
+                                
                                 # 5. TVA
-                                elif "tva" in n: val = infos['TVA']
+                                elif "tva" in n:
+                                    val = infos['TVA']
                                 
                                 if val: st.session_state[key] = val
                             st.success("Données chargées !")
 
-            # --- FORMULAIRE DYNAMIQUE (PLUS DE ST.FORM POUR INTERACTIVITÉ) ---
-            st.divider()
+            # --- FORMULAIRE DYNAMIQUE ---
+            st.divider() # Séparation visuelle
             
             data = {}
             files_map = {}
             main_addr = ""
             
-            # On boucle pour afficher les champs
+            # Boucle d'affichage des champs
             for i, f in enumerate(fields):
                 key = f"f_{sel_col['id']}_{i}_{f['name']}"
                 lbl = f"{f['name']} *" if f.get('required') else f['name']
                 
-                # Init session state
+                # Init session
                 if f['type'] != "Fichier/Image" and key not in st.session_state:
                     st.session_state[key] = ""
                 
-                # --- AFFICHAGE DES CHAMPS ---
-                
+                # Rendu des widgets
                 if f['type'] == "Section/Titre":
-                    st.markdown(f"### {f['name']}")
+                    st.markdown(f"**{f['name']}**")
                     
                 elif f['type'] == "Texte Court":
                     val = st.text_input(lbl, key=key)
                     data[f['name']] = val
-                    # Capture adresse principale
                     n_lower = f['name'].lower()
                     if any(x in n_lower for x in ["adresse", "siège", "kbis", "facturation"]) and not any(x in n_lower for x in ["travaux", "chantier", "installation"]):
                         main_addr = val
@@ -333,21 +342,161 @@ with tabs[0]:
                     main_addr = val 
                     
                 elif f['type'] == "Adresse Travaux":
-                    # CHECKBOX LIVE (Fonctionne maintenant car hors du st.form)
                     use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
                     if use_same and main_addr:
-                        # On force la valeur dans la session
-                        st.session_state[key] = main_addr
+                        if st.session_state[key] != main_addr:
+                            st.session_state[key] = main_addr
+                            st.rerun() # Refresh pour afficher la valeur copiée
                     
                     val = st.text_input(lbl, key=key)
                     data[f['name']] = val
                 
                 elif f['type'] == "SIRET":
-                        val = st.text_input(lbl, key=key)
-                        data[f['name']] = val
+                    val = st.text_input(lbl, key=key)
+                    data[f['name']] = val
                         
                 elif f['type'] == "Fichier/Image":
                     files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                     
                 else: 
-                    data[f['name']] = st
+                    data[f['name']] = st.text_input(lbl, key=key)
+
+            st.write("") # Espaceur
+            st.divider() # Séparateur avant le bouton
+
+            # LE BOUTON D'ENREGISTREMENT (Sorti de la boucle et bien visible)
+            if st.button("💾 ENREGISTRER LE DOSSIER", type="primary", use_container_width=True):
+                
+                # Validation manuelle car pas de st.form
+                missing = []
+                for f in fields:
+                    if f.get('required') and f['type'] not in ["Section/Titre", "Fichier/Image"]:
+                         k = f"f_{sel_col['id']}_{fields.index(f)}_{f['name']}"
+                         if not st.session_state.get(k):
+                             missing.append(f['name'])
+                
+                if missing:
+                    st.error(f"❌ Champs obligatoires manquants : {', '.join(missing)}")
+                else:
+                    with st.spinner("Enregistrement en cours..."):
+                        # Upload fichiers
+                        for fname, flist in files_map.items():
+                            urls = []
+                            if flist:
+                                for fi in flist:
+                                    path = f"{MY_COMPANY_ID}/{sel_col['id']}/{int(time.time())}_{fi.name}"
+                                    u = upload_file(fi, path)
+                                    if u: urls.append(u)
+                            data[fname] = urls
+                        
+                        # Insert DB
+                        supabase.table("records").insert({
+                            "collection_id": sel_col['id'], "data": data, "created_by": st.session_state.user.id
+                        }).execute()
+                        
+                        st.success("✅ Dossier créé avec succès !")
+                        
+                        # Reset des champs
+                        for k in list(st.session_state.keys()):
+                            if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
+                        
+                        time.sleep(1)
+                        st.rerun()
+
+# ONGLET 2 : GESTION
+with tabs[1]:
+    st.header("📂 Dossiers")
+    my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
+    if my_acts:
+        act_ids = [a['id'] for a in my_acts]
+        my_cols = supabase.table("collections").select("*").in_("activity_id", act_ids).execute().data
+        
+        if my_cols:
+            col_ids = [c['id'] for c in my_cols]
+            recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).execute().data
+            
+            if recs:
+                st.write(f"Total : {len(recs)} dossiers")
+                search_map = {f"#{r['id']} - {r['collections']['name']} ({r['created_at'][:10]})": r for r in recs}
+                sel = st.selectbox("Rechercher", list(search_map.keys()))
+                if sel:
+                    r = search_map[sel]
+                    st.markdown(f"### Dossier #{r['id']}")
+                    st.json(r['data'], expanded=False)
+            else:
+                st.info("Aucun dossier.")
+        else:
+            st.info("Pas de modèles.")
+    else:
+        st.info("Pas d'activités.")
+
+# ONGLET 3 : CONFIG
+if len(tabs) > 2:
+    with tabs[2]:
+        st.header("⚙️ Configuration")
+        c_act1, c_act2 = st.columns([1, 2])
+        with c_act1:
+            with st.form("new_act"):
+                n_act = st.text_input("Nouvelle Activité")
+                if st.form_submit_button("Ajouter"):
+                    supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
+                    st.success("Ajouté !")
+                    st.rerun()
+        
+        st.divider()
+        st.subheader("Créer un Modèle")
+        my_acts_config = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
+        
+        if my_acts_config:
+            act_sel = st.selectbox("Lier à", [a['name'] for a in my_acts_config])
+            act_id_sel = next(a['id'] for a in my_acts_config if a['name'] == act_sel)
+            col_name = st.text_input("Nom du modèle")
+            
+            if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
+            
+            c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
+            f_name = c_f1.text_input("Nom champ")
+            f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
+            f_req = c_f3.checkbox("Obligatoire ?")
+            
+            if st.button("Ajouter champ"):
+                st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
+            
+            if st.session_state.temp_fields:
+                st.dataframe(pd.DataFrame(st.session_state.temp_fields))
+            
+            if st.button("💾 Sauvegarder Modèle"):
+                supabase.table("collections").insert({
+                    "name": col_name, "activity_id": act_id_sel, "fields": st.session_state.temp_fields
+                }).execute()
+                st.success("Sauvegardé !")
+                st.session_state.temp_fields = []
+                st.rerun()
+
+# ONGLET 4 : USERS
+if len(tabs) > 3:
+    with tabs[3]:
+        st.header("👥 Utilisateurs")
+        with st.form("add_user"):
+            new_email = st.text_input("Email")
+            new_pass = st.text_input("Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            
+            if st.form_submit_button("Ajouter"):
+                try:
+                    res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                    if res.user:
+                        supabase.table("profiles").insert({
+                            "id": res.user.id, "email": new_email, "company_id": MY_COMPANY_ID,
+                            "role": new_role, "full_name": new_email.split('@')[0]
+                        }).execute()
+                        st.success("Utilisateur créé !")
+                    else:
+                        st.warning("Problème Auth.")
+                except Exception as e:
+                    st.error(f"Erreur : {e}")
+            
+        st.divider()
+        users = supabase.table("profiles").select("email, role, full_name").eq("company_id", MY_COMPANY_ID).execute().data
+        if users:
+            st.dataframe(users)
