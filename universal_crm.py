@@ -269,7 +269,7 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # --- AUTO FILL SIRET V10 (Protection Installation) ---
+            # --- AUTO FILL SIRET V11 (Fix Nom et Fix SIRET Field) ---
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
@@ -282,18 +282,26 @@ with tabs[0]:
                                 n = f['name'].lower()
                                 val = None
                                 
+                                # 0. SIRET (Le champ lui-même !)
+                                if f['type'] == 'SIRET':
+                                    val = siret_in
+                                
                                 # 1. Raison Sociale
-                                if any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
+                                elif any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
                                     val = infos['NOM']
+                                
                                 # 2. Adresse (Exclusion stricte de 'installation')
                                 elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]):
                                     val = infos['ADRESSE']
+                                
                                 # 3. Ville
                                 elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]):
                                     val = infos['VILLE']
+                                
                                 # 4. CP
                                 elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]):
                                     val = infos['CP']
+                                
                                 # 5. TVA
                                 elif "tva" in n:
                                     val = infos['TVA']
@@ -320,7 +328,6 @@ with tabs[0]:
                     elif f['type'] == "Texte Court":
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
-                        # Capture intelligente de l'adresse principale même si type "Texte Court"
                         n_lower = f['name'].lower()
                         if any(x in n_lower for x in ["adresse", "siège", "kbis", "facturation"]) and not any(x in n_lower for x in ["travaux", "chantier", "installation"]):
                             main_addr = val
@@ -331,14 +338,19 @@ with tabs[0]:
                         main_addr = val 
                         
                     elif f['type'] == "Adresse Travaux":
-                        # CHECKBOX D'AUTO-COMPLÉTION
-                        # Fonctionne maintenant même si l'adresse source est un "Texte Court"
+                        # FIX V11 : Force Refresh si la case est cochée
                         use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
                         if use_same and main_addr:
-                            st.session_state[key] = main_addr
+                            if st.session_state[key] != main_addr:
+                                st.session_state[key] = main_addr
+                                st.rerun() # LA SOLUTION MAGIQUE
                         
                         val = st.text_input(lbl, key=key)
                         data[f['name']] = val
+                    
+                    elif f['type'] == "SIRET":
+                         val = st.text_input(lbl, key=key)
+                         data[f['name']] = val
                             
                     elif f['type'] == "Fichier/Image":
                         files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
