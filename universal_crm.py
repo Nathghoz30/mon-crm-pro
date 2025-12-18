@@ -2,19 +2,26 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import time
-import re  # <--- AJOUTÉ : Indispensable pour la sécurité email
+import re
 from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
+
+# Import Gestion des Cookies (Pour la connexion persistante)
+try:
+    import extra_streamlit_components as stx
+except ImportError:
+    st.error("⚠️ Librairie manquante : 'extra-streamlit-components'. Ajoutez-la à requirements.txt")
+    st.stop()
 
 # Import Drag & Drop
 try:
     from streamlit_sortables import sort_items
 except ImportError:
-    st.error("Librairie manquante. Installez-la via : pip install streamlit-sortables")
+    st.error("⚠️ Librairie manquante : 'streamlit-sortables'. Ajoutez-la à requirements.txt")
     st.stop()
 
 # --- CONFIGURATION ---
@@ -24,7 +31,6 @@ st.set_page_config(page_title="Universal CRM SaaS", page_icon="🚀", layout="wi
 @st.cache_resource
 def init_connection():
     try:
-        # Tente de charger depuis st.secrets, sinon valeurs par défaut pour éviter le crash immédiat
         url = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else "URL_MANQUANTE"
         key = st.secrets["SUPABASE_KEY"] if "SUPABASE_KEY" in st.secrets else "KEY_MANQUANTE"
         if url == "URL_MANQUANTE":
@@ -37,11 +43,51 @@ def init_connection():
 
 supabase = init_connection()
 
+# --- GESTION DES COOKIES (PERSISTANCE) ---
+@st.cache_resource(experimental_allow_widgets=True)
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
+
 # --- GESTION ÉTAT SESSION ---
 if 'user' not in st.session_state:
     st.session_state.user = None
 if 'profile' not in st.session_state:
     st.session_state.profile = None
+
+# --- LOGIQUE DE RECONNEXION AUTO (Au chargement) ---
+# Si l'utilisateur n'est pas connecté en RAM, on vérifie les cookies
+if not st.session_state.user:
+    # On attend un peu que le cookie manager soit prêt
+    time.sleep(0.1) 
+    refresh_token = cookie_manager.get("sb_refresh_token")
+    
+    if refresh_token:
+        try:
+            # On tente de restaurer la session via Supabase
+            res = supabase.auth.refresh_session(refresh_token)
+            if res.user and res.session:
+                # 1. Mise à jour de l'user en session
+                st.session_state.user = res.user
+                
+                # 2. Récupération du profil
+                profile_data = supabase.table("profiles").select("*").eq("id", res.user.id).execute().data
+                if profile_data:
+                    st.session_state.profile = profile_data[0]
+                    
+                    # 3. On met à jour le cookie avec le nouveau token (rotation de sécurité)
+                    cookie_manager.set("sb_refresh_token", res.session.refresh_token, expires_at=datetime.now() + timedelta(days=30))
+                    
+                    st.toast("👋 Re-bonjour ! Session restaurée.")
+                else:
+                    # Profil introuvable (rare)
+                    cookie_manager.delete("sb_refresh_token")
+        except Exception as e:
+            # Si le token est expiré ou invalide, on nettoie
+            # st.warning(f"Session expirée : {e}")
+            cookie_manager.delete("sb_refresh_token")
+
 
 # --- FONCTIONS UTILITAIRES ---
 
@@ -51,24 +97,38 @@ def login(email, password):
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         user = res.user
         
-        # 2. Récupération du Profil Métier (Rôle, Entreprise)
+        # 2. Récupération du Profil
         profile_data = supabase.table("profiles").select("*").eq("id", user.id).execute().data
         
         if profile_data:
             st.session_state.user = user
             st.session_state.profile = profile_data[0]
+            
+            # 3. SAUVEGARDE DANS LES COOKIES (30 jours)
+            if res.session:
+                cookie_manager.set("sb_refresh_token", res.session.refresh_token, expires_at=datetime.now() + timedelta(days=30))
+            
             st.success("Connexion réussie !")
             time.sleep(0.5)
             st.rerun()
         else:
-            st.error("Utilisateur authentifié mais aucun profil trouvé. Contactez le support.")
+            st.error("Utilisateur authentifié mais aucun profil trouvé.")
+            supabase.auth.sign_out()
+            
     except Exception as e:
         st.error(f"Erreur de connexion : {e}")
 
 def logout():
+    # 1. Nettoyage Supabase
     supabase.auth.sign_out()
+    
+    # 2. Nettoyage Session
     st.session_state.user = None
     st.session_state.profile = None
+    
+    # 3. Nettoyage Cookie
+    cookie_manager.delete("sb_refresh_token")
+    
     st.rerun()
 
 def get_siret_info(siret):
@@ -132,14 +192,13 @@ with st.sidebar:
 st.title("Universal CRM SaaS 🚀")
 
 # ------------------------------------------------------------------
-# 👑 SUPER ADMIN DASHBOARD (Gestion des Entreprises)
+# 👑 SUPER ADMIN DASHBOARD
 # ------------------------------------------------------------------
 if MY_ROLE == "super_admin":
     st.success("👑 Mode Super Admin activé")
     
     sa_tab1, sa_tab2 = st.tabs(["🏢 Gestion Entreprises", "👀 Accéder au CRM"])
     
-    # --- CRÉATION SÉCURISÉE (CODE CORRIGÉ) ---
     with sa_tab1:
         st.subheader("Créer une nouvelle entreprise")
         with st.form("create_company"):
@@ -150,7 +209,6 @@ if MY_ROLE == "super_admin":
             submitted = st.form_submit_button("Créer Entreprise & Admin")
             
             if submitted:
-                # 1. Validations préalables
                 if not c_name or not admin_email or not admin_pass:
                     st.error("❌ Tous les champs sont requis.")
                     st.stop()
@@ -163,17 +221,14 @@ if MY_ROLE == "super_admin":
                     st.warning("⚠️ Mot de passe trop court.")
                     st.stop()
 
-                # 2. Processus de création avec Rollback
                 new_comp_id = None
                 try:
-                    # A. Créer Entreprise
                     res_comp = supabase.table("companies").insert({"name": c_name}).execute()
                     if res_comp.data:
                         new_comp_id = res_comp.data[0]['id']
                     else:
                         raise Exception("Échec création entreprise (DB)")
                     
-                    # B. Créer User Auth
                     res_auth = supabase.auth.sign_up({
                         "email": admin_email, 
                         "password": admin_pass,
@@ -186,67 +241,54 @@ if MY_ROLE == "super_admin":
                         }
                     })
                     
-                    # Vérification échec silencieux Auth
                     if res_auth.user is None and res_auth.session is None:
                         raise Exception("L'utilisateur n'a pas pu être créé (Email déjà pris ?).")
 
-                    # C. Succès
-                    st.success(f"✅ Entreprise '{c_name}' et Admin '{admin_email}' créés avec succès !")
+                    st.success(f"✅ Entreprise '{c_name}' créée !")
                     st.balloons()
                     time.sleep(2)
                     st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ Erreur : {e}")
-                    # ROLLBACK : Nettoyage automatique
                     if new_comp_id:
-                        st.warning("🔄 Annulation : Suppression de l'entreprise fantôme...")
+                        st.warning("🔄 Nettoyage...")
                         supabase.table("companies").delete().eq("id", new_comp_id).execute()
-                        st.info("✅ Base de données nettoyée.")
 
     with sa_tab2:
-        st.write("Sélectionnez une entreprise pour voir son CRM :")
+        st.write("Sélectionnez une entreprise :")
         all_comps = supabase.table("companies").select("*").execute().data
         comp_map = {c['name']: c['id'] for c in all_comps}
         target_comp_name = st.selectbox("Choisir Entreprise", list(comp_map.keys()))
         
-        # SUPER ADMIN IMPERSONATION
         if target_comp_name:
             MY_COMPANY_ID = comp_map[target_comp_name]
-            st.info(f"👀 Vous visualisez les données de : **{target_comp_name}**")
+            st.info(f"👀 Vue sur : **{target_comp_name}**")
             st.divider()
 
-# Si Super Admin n'a pas choisi d'entreprise, on arrête là
 if MY_ROLE == "super_admin" and not MY_COMPANY_ID:
-    st.warning("👈 Veuillez sélectionner une entreprise dans l'onglet 'Accéder au CRM' pour continuer.")
+    st.warning("👈 Sélectionnez une entreprise pour continuer.")
     st.stop()
 
 
 # ------------------------------------------------------------------
-# 🏢 CRM LOGIC (Filtré par MY_COMPANY_ID)
+# 🏢 CRM LOGIC
 # ------------------------------------------------------------------
 
-# Définition des onglets
 tabs_list = ["1. 📝 Nouveau Dossier", "2. 📂 Gestion des Dossiers"]
 if MY_ROLE in ["admin", "super_admin"]:
-    tabs_list.append("3. ⚙️ Configuration (Admin)")
+    tabs_list.append("3. ⚙️ Configuration")
     tabs_list.append("4. 👥 Utilisateurs")
 
 tabs = st.tabs(tabs_list)
 
-# ==========================================
 # ONGLET 1 : NOUVEAU DOSSIER
-# ==========================================
 with tabs[0]:
     st.header("Créer un nouveau dossier")
-    
-    # Filtre par Company ID
     activities = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
     
     if not activities:
-        st.info("⚠️ Aucune activité configurée pour cette entreprise.")
-        if MY_ROLE in ["admin", "super_admin"]:
-            st.write("👉 Allez dans l'onglet **Configuration** pour commencer.")
+        st.info("⚠️ Aucune activité configurée.")
     else:
         act_choice = st.selectbox("Activité", [a['name'] for a in activities])
         act_id = next(a['id'] for a in activities if a['name'] == act_choice)
@@ -258,9 +300,9 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # --- AUTO-FILL SIRET ---
+            # SIRET Auto-fill
             if any(f['type'] == "SIRET" for f in fields):
-                with st.expander("⚡ Remplissage Rapide via SIRET", expanded=True):
+                with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
                     siret_in = c_s.text_input("SIRET", label_visibility="collapsed")
                     if c_b.button("Remplir"):
@@ -275,9 +317,9 @@ with tabs[0]:
                                 elif "ville" in n: val = infos['VILLE']
                                 elif "cp" in n: val = infos['CP']
                                 if val: st.session_state[key] = val
-                            st.success("Données chargées !")
+                            st.success("Trouvé !")
 
-            # --- FORMULAIRE ---
+            # Formulaire
             with st.form("add_rec"):
                 data = {}
                 files_map = {}
@@ -286,7 +328,6 @@ with tabs[0]:
                 for i, f in enumerate(fields):
                     key = f"f_{sel_col['id']}_{i}_{f['name']}"
                     lbl = f"{f['name']} *" if f.get('required') else f['name']
-                    
                     if key not in st.session_state: st.session_state[key] = ""
                     
                     if f['type'] == "Section/Titre":
@@ -296,7 +337,7 @@ with tabs[0]:
                         data[f['name']] = val
                         if "adresse" in f['name'].lower() and "travaux" not in f['name'].lower(): main_addr = val
                     elif f['type'] == "Adresse Travaux":
-                        st.text_input(lbl, key=key) # Le reste géré par logique visuelle
+                        st.text_input(lbl, key=key)
                         if st.checkbox(f"Identique siège ({main_addr}) ?", key=f"chk_{key}"):
                             data[f['name']] = main_addr
                         else:
@@ -307,7 +348,6 @@ with tabs[0]:
                         data[f['name']] = st.text_input(lbl, key=key)
 
                 if st.form_submit_button("Enregistrer"):
-                    # Upload
                     for fname, flist in files_map.items():
                         urls = []
                         if flist:
@@ -323,120 +363,96 @@ with tabs[0]:
                         "created_by": st.session_state.user.id
                     }).execute()
                     st.success("Dossier créé !")
-                    # Clean state
                     for k in list(st.session_state.keys()):
                         if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
                     time.sleep(1)
                     st.rerun()
 
-# ==========================================
-# ONGLET 2 : GESTION (Filtré)
-# ==========================================
+# ONGLET 2 : GESTION
 with tabs[1]:
     st.header("📂 Dossiers")
-    
-    # On récupère d'abord les modèles de CETTE entreprise via les activités
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
     if my_acts:
         act_ids = [a['id'] for a in my_acts]
-        # Supabase 'in_' attend un tuple ou liste
         my_cols = supabase.table("collections").select("*").in_("activity_id", act_ids).execute().data
         
         if my_cols:
             col_ids = [c['id'] for c in my_cols]
-            # Fetch records
             recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).execute().data
             
             if recs:
-                st.write(f"Nombre de dossiers trouvés : {len(recs)}")
-                search_map = {f"#{r['id']} - {r['collections']['name']} (Créé le {r['created_at'][:10]})": r for r in recs}
-                sel = st.selectbox("Rechercher un dossier", list(search_map.keys()))
+                st.write(f"Total : {len(recs)} dossiers")
+                search_map = {f"#{r['id']} - {r['collections']['name']} ({r['created_at'][:10]})": r for r in recs}
+                sel = st.selectbox("Rechercher", list(search_map.keys()))
                 if sel:
                     r = search_map[sel]
                     st.markdown(f"### Dossier #{r['id']}")
                     st.json(r['data'], expanded=False)
-                    
             else:
-                st.info("Aucun dossier enregistré pour le moment.")
+                st.info("Aucun dossier.")
         else:
-            st.info("Pas de modèles configurés.")
+            st.info("Pas de modèles.")
     else:
-        st.info("Pas d'activités configurées.")
+        st.info("Pas d'activités.")
 
-# ==========================================
-# ONGLET 3 : CONFIG (ADMIN ONLY)
-# ==========================================
+# ONGLET 3 : CONFIG
 if len(tabs) > 2:
     with tabs[2]:
-        st.header("⚙️ Configuration Entreprise")
-        
+        st.header("⚙️ Configuration")
         c_act1, c_act2 = st.columns([1, 2])
         with c_act1:
             with st.form("new_act"):
                 n_act = st.text_input("Nouvelle Activité")
                 if st.form_submit_button("Ajouter"):
                     supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
-                    st.success("Activité ajoutée !")
+                    st.success("Ajouté !")
                     st.rerun()
         
         st.divider()
-        st.subheader("Créer un Modèle de Dossier")
-        
-        # Récupérer les activités DE CETTE ENTREPRISE
+        st.subheader("Créer un Modèle")
         my_acts_config = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
         
         if my_acts_config:
-            act_sel = st.selectbox("Lier à l'activité", [a['name'] for a in my_acts_config])
+            act_sel = st.selectbox("Lier à", [a['name'] for a in my_acts_config])
             act_id_sel = next(a['id'] for a in my_acts_config if a['name'] == act_sel)
-            
-            col_name = st.text_input("Nom du modèle (ex: Audit RGE)")
+            col_name = st.text_input("Nom du modèle")
             
             if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
             
             c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
-            f_name = c_f1.text_input("Nom du champ")
+            f_name = c_f1.text_input("Nom champ")
             f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
             f_req = c_f3.checkbox("Obligatoire ?")
             
-            if st.button("Ajouter ce champ"):
+            if st.button("Ajouter champ"):
                 st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
             
-            # Affichage dynamique des champs
             if st.session_state.temp_fields:
-                st.write("Aperçu des champs :")
                 st.dataframe(pd.DataFrame(st.session_state.temp_fields))
             
-            if st.button("💾 Sauvegarder le Modèle"):
+            if st.button("💾 Sauvegarder Modèle"):
                 supabase.table("collections").insert({
                     "name": col_name,
                     "activity_id": act_id_sel,
                     "fields": st.session_state.temp_fields
                 }).execute()
-                st.success("Modèle sauvegardé !")
+                st.success("Sauvegardé !")
                 st.session_state.temp_fields = []
                 st.rerun()
-        else:
-            st.warning("Créez d'abord une activité ci-dessus.")
 
-# ==========================================
-# ONGLET 4 : UTILISATEURS (ADMIN ONLY)
-# ==========================================
+# ONGLET 4 : USERS
 if len(tabs) > 3:
     with tabs[3]:
-        st.header("👥 Gestion des Utilisateurs")
-        st.info("Ajoutez des collaborateurs à VOTRE entreprise.")
-        
+        st.header("👥 Utilisateurs")
         with st.form("add_user"):
-            new_email = st.text_input("Email collaborateur")
-            new_pass = st.text_input("Mot de passe provisoire", type="password")
+            new_email = st.text_input("Email")
+            new_pass = st.text_input("Mot de passe", type="password")
             new_role = st.selectbox("Rôle", ["user", "admin"])
             
-            if st.form_submit_button("Créer Utilisateur"):
+            if st.form_submit_button("Ajouter"):
                 try:
-                    # Création Auth (C'est là que le trigger auto peut aider, mais on fait manuel ici)
                     res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                     if res.user:
-                        # Création Profil lié à MON entreprise (MY_COMPANY_ID)
                         supabase.table("profiles").insert({
                             "id": res.user.id,
                             "email": new_email,
@@ -444,14 +460,13 @@ if len(tabs) > 3:
                             "role": new_role,
                             "full_name": new_email.split('@')[0]
                         }).execute()
-                        st.success("Utilisateur ajouté à votre équipe !")
+                        st.success("Utilisateur créé !")
                     else:
-                        st.warning("Vérifiez si l'utilisateur existe déjà.")
+                        st.warning("Problème création user.")
                 except Exception as e:
                     st.error(f"Erreur : {e}")
             
         st.divider()
-        st.write("### Membres de l'équipe")
-        users = supabase.table("profiles").select("email, role, full_name, last_sign_in_at").eq("company_id", MY_COMPANY_ID).execute().data
+        users = supabase.table("profiles").select("email, role, full_name").eq("company_id", MY_COMPANY_ID).execute().data
         if users:
             st.dataframe(users)
