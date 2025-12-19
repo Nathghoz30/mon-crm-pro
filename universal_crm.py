@@ -375,32 +375,136 @@ with tabs[0]:
                         time.sleep(1)
                         st.rerun()
 
-# ONGLET 2 : GESTION
+# ONGLET 2 : GESTION (REFONTE TOTALE V19)
 with tabs[1]:
-    st.header("📂 Dossiers")
+    st.header("📂 Gestion des Dossiers")
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
+    
     if my_acts:
         act_ids = [a['id'] for a in my_acts]
         my_cols = supabase.table("collections").select("*").in_("activity_id", act_ids).execute().data
         
         if my_cols:
             col_ids = [c['id'] for c in my_cols]
-            recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).execute().data
+            # On récupère tous les dossiers
+            recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).order('created_at', desc=True).execute().data
             
             if recs:
-                st.write(f"Total : {len(recs)} dossiers")
-                search_map = {f"#{r['id']} - {r['collections']['name']} ({r['created_at'][:10]})": r for r in recs}
-                sel = st.selectbox("Rechercher", list(search_map.keys()))
-                if sel:
-                    r = search_map[sel]
-                    st.markdown(f"### Dossier #{r['id']}")
-                    st.json(r['data'], expanded=False)
+                st.write(f"**{len(recs)} dossiers trouvés**")
+                
+                # SÉLECTION DU DOSSIER
+                search_map = {f"#{r['id']} | {r['collections']['name']} | Créé le {r['created_at'][:10]}": r for r in recs}
+                sel_label = st.selectbox("Sélectionner le dossier à gérer :", list(search_map.keys()))
+                
+                if sel_label:
+                    r = search_map[sel_label]
+                    fields_def = r['collections']['fields']
+                    current_data = r['data']
+                    
+                    st.divider()
+                    
+                    # --- ZONE 1 : MODIFICATION DES DONNÉES (FORMULAIRE) ---
+                    st.subheader("📝 Modifier les informations")
+                    
+                    with st.form(f"edit_form_{r['id']}"):
+                        updated_data = current_data.copy()
+                        
+                        # On boucle sur les champs pour afficher les inputs pré-remplis
+                        for f in fields_def:
+                            f_name = f['name']
+                            f_type = f['type']
+                            
+                            # On ne traite pas les fichiers ici, mais dans la zone 2
+                            if f_type == "Fichier/Image":
+                                continue
+                                
+                            current_val = current_data.get(f_name, "")
+                            
+                            if f_type == "Section/Titre":
+                                st.markdown(f"**{f_name}**")
+                            else:
+                                # Pour tout ce qui est texte/adresse/siret etc.
+                                updated_data[f_name] = st.text_input(f_name, value=current_val)
+                        
+                        if st.form_submit_button("💾 Sauvegarder les modifications"):
+                            supabase.table("records").update({"data": updated_data}).eq("id", r['id']).execute()
+                            st.success("Informations mises à jour !")
+                            time.sleep(1)
+                            st.rerun()
+
+                    st.divider()
+                    
+                    # --- ZONE 2 : GESTION DES FICHIERS (INTERACTIVE) ---
+                    st.subheader("📂 Gestion des Fichiers")
+                    
+                    file_fields = [f for f in fields_def if f['type'] == "Fichier/Image"]
+                    
+                    if not file_fields:
+                        st.info("Ce modèle ne contient pas de champs 'Fichier'.")
+                    else:
+                        for ff in file_fields:
+                            fname = ff['name']
+                            # Récupération de la liste actuelle des URLs (ou liste vide)
+                            existing_urls = current_data.get(fname, [])
+                            if not isinstance(existing_urls, list): existing_urls = []
+                            
+                            with st.expander(f"📁 {fname} ({len(existing_urls)} fichiers)", expanded=True):
+                                
+                                # A. LISTE DES FICHIERS EXISTANTS
+                                if existing_urls:
+                                    for i, url in enumerate(existing_urls):
+                                        c_view, c_del = st.columns([4, 1])
+                                        # On essaie d'extraire un nom propre de l'URL
+                                        display_name = url.split('/')[-1] if '/' in url else f"Fichier {i+1}"
+                                        
+                                        c_view.markdown(f"📄 [{display_name}]({url})")
+                                        
+                                        # BOUTON SUPPRIMER
+                                        if c_del.button("❌", key=f"del_file_{r['id']}_{fname}_{i}"):
+                                            # On retire l'URL de la liste locale
+                                            new_url_list = [u for u in existing_urls if u != url]
+                                            # On met à jour le JSON global
+                                            current_data[fname] = new_url_list
+                                            # On update la DB
+                                            supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
+                                            st.toast("Fichier supprimé !")
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                else:
+                                    st.caption("Aucun fichier pour le moment.")
+                                
+                                # B. AJOUT DE NOUVEAUX FICHIERS
+                                st.write("---")
+                                st.caption(f"Ajouter dans '{fname}' :")
+                                new_files = st.file_uploader(f"Upload {fname}", accept_multiple_files=True, key=f"up_{r['id']}_{fname}", label_visibility="collapsed")
+                                
+                                if new_files:
+                                    if st.button(f"Envoyer {len(new_files)} fichier(s) dans {fname}", key=f"send_{r['id']}_{fname}"):
+                                        with st.spinner("Envoi en cours..."):
+                                            added_urls = []
+                                            for nf in new_files:
+                                                # Upload Supabase Storage
+                                                path = f"{MY_COMPANY_ID}/{r['collection_id']}/{r['id']}_{int(time.time())}_{nf.name}"
+                                                pub_url = upload_file(nf, path)
+                                                if pub_url:
+                                                    added_urls.append(pub_url)
+                                            
+                                            # Fusion avec les anciens
+                                            final_list = existing_urls + added_urls
+                                            current_data[fname] = final_list
+                                            
+                                            # Save DB
+                                            supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
+                                            st.success("Fichiers ajoutés !")
+                                            time.sleep(1)
+                                            st.rerun()
+
             else:
-                st.info("Aucun dossier.")
+                st.info("Aucun dossier enregistré pour le moment.")
         else:
-            st.info("Pas de modèles.")
+            st.info("Pas de modèles de dossier configurés.")
     else:
-        st.info("Pas d'activités.")
+        st.info("Pas d'activités configurées.")
 
 # ONGLET 3 : CONFIG
 if len(tabs) > 2:
