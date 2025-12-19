@@ -259,7 +259,6 @@ with tabs[0]:
     if not activities:
         st.info("⚠️ Aucune activité configurée.")
     else:
-        # MENU DÉROULANT ACTIVITÉ 1 (ID OK)
         act_choice = st.selectbox("Activité", [a['name'] for a in activities])
         act_id = next(a['id'] for a in activities if a['name'] == act_choice)
         
@@ -441,11 +440,11 @@ if len(tabs) > 2:
             st.warning("Créez d'abord une activité.")
         else:
             act_names = [a['name'] for a in current_acts]
-            # MENU DÉROULANT ACTIVITÉ 2 (CORRIGÉ AVEC KEY)
+            # CLÉ UNIQUE POUR ÉVITER LE BUG DuplicateId
             selected_act_name = st.selectbox("Activité", act_names, key="config_act_selection")
             selected_act_id = next(a['id'] for a in current_acts if a['name'] == selected_act_name)
             
-            # A. CRÉATION
+            # A. CRÉATION NOUVEAU MODÈLE
             with st.expander("➕ Créer un nouveau modèle", expanded=False):
                 st.markdown("#### Nouveau Modèle")
                 new_model_name = st.text_input("Nom du modèle")
@@ -495,7 +494,7 @@ if len(tabs) > 2:
                             st.session_state.temp_fields = []
                             st.rerun()
 
-            # B. MODIFICATION
+            # B. MODIFICATION (ADD / DELETE / SORT) V17
             st.write("---")
             st.write(f"**Gérer les modèles existants :**")
             
@@ -504,30 +503,63 @@ if len(tabs) > 2:
             if existing_models:
                 for mod in existing_models:
                     with st.expander(f"📝 {mod['name']} (Modifier)", expanded=False):
-                        st.info("💡 Changez l'ordre des champs puis cliquez sur 'Valider'.")
                         
+                        # 1. AJOUTER UN CHAMP
+                        st.markdown("##### ➕ Ajouter un champ")
+                        c_a1, c_a2, c_a3, c_a4 = st.columns([3, 2, 1, 1])
+                        n_fn = c_a1.text_input("Nom", key=f"n_fn_{mod['id']}")
+                        n_ft = c_a2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"], key=f"n_ft_{mod['id']}")
+                        n_fr = c_a3.checkbox("Requis?", key=f"n_fr_{mod['id']}")
+                        
+                        if c_a4.button("Ajouter", key=f"add_btn_{mod['id']}"):
+                            if n_fn:
+                                new_field = {"name": n_fn, "type": n_ft, "required": n_fr}
+                                updated_fields = mod['fields'] + [new_field]
+                                supabase.table("collections").update({"fields": updated_fields}).eq("id", mod['id']).execute()
+                                st.success("Champ ajouté !")
+                                time.sleep(0.5)
+                                st.rerun()
+
+                        # 2. SUPPRIMER DES CHAMPS
+                        st.markdown("##### 🗑️ Supprimer des champs")
                         curr_fields = mod['fields']
-                        f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
+                        field_names = [f['name'] for f in curr_fields]
                         
-                        # Tri
-                        s_labels = sort_items(f_labels, direction='vertical', key=f"sort_{mod['id']}")
+                        to_delete = st.multiselect("Sélectionnez les champs à supprimer :", field_names, key=f"del_sel_{mod['id']}")
                         
-                        col_s, col_d = st.columns([3, 1])
+                        if to_delete:
+                            if st.button(f"Confirmer la suppression de {len(to_delete)} champ(s)", key=f"conf_del_{mod['id']}"):
+                                remaining_fields = [f for f in curr_fields if f['name'] not in to_delete]
+                                supabase.table("collections").update({"fields": remaining_fields}).eq("id", mod['id']).execute()
+                                st.success("Champs supprimés !")
+                                time.sleep(0.5)
+                                st.rerun()
+
+                        # 3. TRIER (Drag & Drop)
+                        st.markdown("##### 🔃 Réorganiser l'ordre")
+                        st.caption("Glissez-déposez puis cliquez sur Valider.")
                         
-                        if col_s.button("💾 Valider le nouvel ordre", key=f"save_{mod['id']}"):
-                            new_list = []
-                            for l in s_labels:
+                        # Re-fetch fields to be sure (in case of add/delete above)
+                        current_f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
+                        
+                        sorted_f_labels = sort_items(current_f_labels, direction='vertical', key=f"sort_{mod['id']}")
+                        
+                        col_valid, col_delete_mod = st.columns([3, 1])
+                        
+                        if col_valid.button("💾 Valider le nouvel ordre", key=f"save_ord_{mod['id']}"):
+                            final_list = []
+                            for l in sorted_f_labels:
                                 for f in curr_fields:
                                     if f"{f['name']}  ::  [{f['type']}]" == l:
-                                        new_list.append(f)
+                                        final_list.append(f)
                                         break
-                            
-                            supabase.table("collections").update({"fields": new_list}).eq("id", mod['id']).execute()
-                            st.success("Ordre mis à jour !")
-                            time.sleep(1)
+                            supabase.table("collections").update({"fields": final_list}).eq("id", mod['id']).execute()
+                            st.success("Ordre sauvegardé !")
+                            time.sleep(0.5)
                             st.rerun()
                             
-                        if col_d.button("🗑️ Supprimer", key=f"del_{mod['id']}", type="primary"):
+                        # 4. SUPPRIMER LE MODÈLE
+                        if col_delete_mod.button("💀 Supprimer le Modèle", key=f"kill_mod_{mod['id']}", type="primary"):
                             supabase.table("collections").delete().eq("id", mod['id']).execute()
                             st.rerun()
             else:
