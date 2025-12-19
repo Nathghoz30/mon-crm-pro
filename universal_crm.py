@@ -494,7 +494,7 @@ if len(tabs) > 2:
                             st.session_state.temp_fields = []
                             st.rerun()
 
-            # B. MODIFICATION (ADD / DELETE / SORT) V17
+            # B. MODIFICATION (V18 - KEY DYNAMIQUE POUR LE TRI)
             st.write("---")
             st.write(f"**Gérer les modèles existants :**")
             
@@ -504,6 +504,11 @@ if len(tabs) > 2:
                 for mod in existing_models:
                     with st.expander(f"📝 {mod['name']} (Modifier)", expanded=False):
                         
+                        # Compteur pour rafraîchir le composant de tri
+                        tracker_key = f"update_counter_{mod['id']}"
+                        if tracker_key not in st.session_state:
+                            st.session_state[tracker_key] = 0
+
                         # 1. AJOUTER UN CHAMP
                         st.markdown("##### ➕ Ajouter un champ")
                         c_a1, c_a2, c_a3, c_a4 = st.columns([3, 2, 1, 1])
@@ -516,6 +521,8 @@ if len(tabs) > 2:
                                 new_field = {"name": n_fn, "type": n_ft, "required": n_fr}
                                 updated_fields = mod['fields'] + [new_field]
                                 supabase.table("collections").update({"fields": updated_fields}).eq("id", mod['id']).execute()
+                                # On force le refresh du tri
+                                st.session_state[tracker_key] += 1
                                 st.success("Champ ajouté !")
                                 time.sleep(0.5)
                                 st.rerun()
@@ -531,28 +538,40 @@ if len(tabs) > 2:
                             if st.button(f"Confirmer la suppression de {len(to_delete)} champ(s)", key=f"conf_del_{mod['id']}"):
                                 remaining_fields = [f for f in curr_fields if f['name'] not in to_delete]
                                 supabase.table("collections").update({"fields": remaining_fields}).eq("id", mod['id']).execute()
+                                # On force le refresh du tri
+                                st.session_state[tracker_key] += 1
                                 st.success("Champs supprimés !")
                                 time.sleep(0.5)
                                 st.rerun()
 
-                        # 3. TRIER (Drag & Drop)
+                        # 3. TRIER (Key dynamique utilisée ici)
                         st.markdown("##### 🔃 Réorganiser l'ordre")
                         st.caption("Glissez-déposez puis cliquez sur Valider.")
                         
-                        # Re-fetch fields to be sure (in case of add/delete above)
                         current_f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
                         
-                        sorted_f_labels = sort_items(current_f_labels, direction='vertical', key=f"sort_{mod['id']}")
+                        # LA CLÉ MAGIQUE QUI CHANGE À CHAQUE UPDATE
+                        dynamic_sort_key = f"sort_{mod['id']}_{st.session_state[tracker_key]}"
+                        
+                        sorted_f_labels = sort_items(current_f_labels, direction='vertical', key=dynamic_sort_key)
                         
                         col_valid, col_delete_mod = st.columns([3, 1])
                         
                         if col_valid.button("💾 Valider le nouvel ordre", key=f"save_ord_{mod['id']}"):
                             final_list = []
+                            # Reconstitution de la liste dans le bon ordre
                             for l in sorted_f_labels:
                                 for f in curr_fields:
                                     if f"{f['name']}  ::  [{f['type']}]" == l:
                                         final_list.append(f)
                                         break
+                            
+                            # Sécurité : on ajoute à la fin les champs orphelins (si bug de mapping)
+                            existing_names_in_sorted = [x['name'] for x in final_list]
+                            for f in curr_fields:
+                                if f['name'] not in existing_names_in_sorted:
+                                    final_list.append(f)
+
                             supabase.table("collections").update({"fields": final_list}).eq("id", mod['id']).execute()
                             st.success("Ordre sauvegardé !")
                             time.sleep(0.5)
