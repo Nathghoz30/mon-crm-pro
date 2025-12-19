@@ -282,50 +282,30 @@ with tabs[0]:
                                 n = f['name'].lower()
                                 val = None
                                 
-                                # 0. SIRET (Le champ lui-même !)
-                                if f['type'] == 'SIRET':
-                                    val = siret_in
-                                
-                                # 1. Raison Sociale
-                                elif any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]):
-                                    val = infos['NOM']
-                                
-                                # 2. Adresse
-                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]):
-                                    val = infos['ADRESSE']
-                                
-                                # 3. Ville
-                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]):
-                                    val = infos['VILLE']
-                                
-                                # 4. CP
-                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]):
-                                    val = infos['CP']
-                                
-                                # 5. TVA
-                                elif "tva" in n:
-                                    val = infos['TVA']
+                                if f['type'] == 'SIRET': val = siret_in
+                                elif any(x in n for x in ["raison sociale", "société", "entreprise", "etablissement"]): val = infos['NOM']
+                                elif any(x in n for x in ["adresse", "siège", "kbis"]) and not any(y in n for y in ["travaux", "chantier", "intervention", "installation"]): val = infos['ADRESSE']
+                                elif "ville" in n and not any(y in n for y in ["travaux", "chantier", "installation"]): val = infos['VILLE']
+                                elif any(x in n for x in ["cp", "code postal"]) and not any(y in n for y in ["travaux", "chantier", "installation"]): val = infos['CP']
+                                elif "tva" in n: val = infos['TVA']
                                 
                                 if val: st.session_state[key] = val
                             st.success("Données chargées !")
 
             # --- FORMULAIRE DYNAMIQUE ---
-            st.divider() # Séparation visuelle
+            st.divider()
             
             data = {}
             files_map = {}
             main_addr = ""
             
-            # Boucle d'affichage des champs
             for i, f in enumerate(fields):
                 key = f"f_{sel_col['id']}_{i}_{f['name']}"
                 lbl = f"{f['name']} *" if f.get('required') else f['name']
                 
-                # Init session
                 if f['type'] != "Fichier/Image" and key not in st.session_state:
                     st.session_state[key] = ""
                 
-                # Rendu des widgets
                 if f['type'] == "Section/Titre":
                     st.markdown(f"**{f['name']}**")
                     
@@ -346,7 +326,7 @@ with tabs[0]:
                     if use_same and main_addr:
                         if st.session_state[key] != main_addr:
                             st.session_state[key] = main_addr
-                            st.rerun() # Refresh pour afficher la valeur copiée
+                            st.rerun()
                     
                     val = st.text_input(lbl, key=key)
                     data[f['name']] = val
@@ -361,13 +341,10 @@ with tabs[0]:
                 else: 
                     data[f['name']] = st.text_input(lbl, key=key)
 
-            st.write("") # Espaceur
-            st.divider() # Séparateur avant le bouton
+            st.write("")
+            st.divider()
 
-            # LE BOUTON D'ENREGISTREMENT (Sorti de la boucle et bien visible)
             if st.button("💾 ENREGISTRER LE DOSSIER", type="primary", use_container_width=True):
-                
-                # Validation manuelle car pas de st.form
                 missing = []
                 for f in fields:
                     if f.get('required') and f['type'] not in ["Section/Titre", "Fichier/Image"]:
@@ -379,7 +356,6 @@ with tabs[0]:
                     st.error(f"❌ Champs obligatoires manquants : {', '.join(missing)}")
                 else:
                     with st.spinner("Enregistrement en cours..."):
-                        # Upload fichiers
                         for fname, flist in files_map.items():
                             urls = []
                             if flist:
@@ -389,17 +365,13 @@ with tabs[0]:
                                     if u: urls.append(u)
                             data[fname] = urls
                         
-                        # Insert DB
                         supabase.table("records").insert({
                             "collection_id": sel_col['id'], "data": data, "created_by": st.session_state.user.id
                         }).execute()
                         
                         st.success("✅ Dossier créé avec succès !")
-                        
-                        # Reset des champs
                         for k in list(st.session_state.keys()):
                             if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
-                        
                         time.sleep(1)
                         st.rerun()
 
@@ -430,48 +402,132 @@ with tabs[1]:
     else:
         st.info("Pas d'activités.")
 
-# ONGLET 3 : CONFIG
+# ONGLET 3 : CONFIG (VERSION COMPLETE V14)
 if len(tabs) > 2:
     with tabs[2]:
-        st.header("⚙️ Configuration")
-        c_act1, c_act2 = st.columns([1, 2])
-        with c_act1:
-            with st.form("new_act"):
-                n_act = st.text_input("Nouvelle Activité")
+        st.header("⚙️ Configuration Avancée")
+        
+        # --- 1. GESTION DES ACTIVITÉS ---
+        st.subheader("1. Activités")
+        c1, c2 = st.columns([1, 2])
+        
+        # Ajout
+        with c1:
+            with st.form("new_act_v14"):
+                n_act = st.text_input("Ajouter une activité", placeholder="Ex: Isolation")
                 if st.form_submit_button("Ajouter"):
-                    supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
-                    st.success("Ajouté !")
-                    st.rerun()
+                    if n_act:
+                        supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
+                        st.success("Activité ajoutée !")
+                        st.rerun()
         
+        # Liste & Suppression
+        with c2:
+            st.write("**Activités existantes :**")
+            current_acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
+            if current_acts:
+                for act in current_acts:
+                    col_a, col_b = st.columns([4, 1])
+                    col_a.info(f"📌 {act['name']}")
+                    if col_b.button("🗑️", key=f"del_act_{act['id']}"):
+                        supabase.table("activities").delete().eq("id", act['id']).execute()
+                        st.rerun()
+            else:
+                st.caption("Aucune activité.")
+
         st.divider()
-        st.subheader("Créer un Modèle")
-        my_acts_config = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
+
+        # --- 2. GESTION DES MODÈLES ---
+        st.subheader("2. Modèles de Dossiers")
         
-        if my_acts_config:
-            act_sel = st.selectbox("Lier à", [a['name'] for a in my_acts_config])
-            act_id_sel = next(a['id'] for a in my_acts_config if a['name'] == act_sel)
-            col_name = st.text_input("Nom du modèle")
+        if not current_acts:
+            st.warning("Veuillez d'abord créer une activité.")
+        else:
+            # Sélection de l'activité parente
+            act_names = [a['name'] for a in current_acts]
+            selected_act_name = st.selectbox("Sélectionner l'activité", act_names)
+            selected_act_id = next(a['id'] for a in current_acts if a['name'] == selected_act_name)
             
-            if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
+            # --- SECTION A : CRÉER NOUVEAU MODÈLE ---
+            with st.expander("➕ Créer un nouveau modèle", expanded=False):
+                st.markdown("#### Nouveau Modèle")
+                new_model_name = st.text_input("Nom du modèle (ex: Audit RGE)")
+                
+                if "temp_fields" not in st.session_state:
+                    st.session_state.temp_fields = []
+
+                # Formulaire d'ajout de champ
+                c_f1, c_f2, c_f3, c_f4 = st.columns([3, 2, 1, 1])
+                f_name = c_f1.text_input("Nom du champ")
+                f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
+                f_req = c_f3.checkbox("Obligatoire ?", value=False)
+                
+                if c_f4.button("Ajouter"):
+                    if f_name:
+                        st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
+                        st.rerun()
+
+                # --- ZONE DRAG & DROP ET SUPPRESSION ---
+                if st.session_state.temp_fields:
+                    st.write("---")
+                    st.write("🔧 **Organiser les champs :** (Glisser-déposer pour trier, Croix pour supprimer)")
+                    
+                    # 1. Gestion Suppression (Liste simple avec bouton X)
+                    for idx, f in enumerate(st.session_state.temp_fields):
+                        cols = st.columns([0.5, 4, 2, 1])
+                        cols[0].write(f"{idx+1}.")
+                        cols[1].write(f"**{f['name']}**")
+                        cols[2].caption(f"{f['type']}")
+                        if cols[3].button("❌", key=f"rm_field_{idx}"):
+                            st.session_state.temp_fields.pop(idx)
+                            st.rerun()
+                    
+                    # 2. Gestion Ordre (Sortable)
+                    st.info("👇 Utilisez la liste ci-dessous pour changer l'ordre (Drag & Drop)")
+                    field_labels = [f"{f['name']}  ::  [{f['type']}]" for f in st.session_state.temp_fields]
+                    sorted_labels = sort_items(field_labels, direction='vertical')
+                    
+                    # On détecte si l'ordre a changé
+                    if sorted_labels and sorted_labels != field_labels:
+                        # On reconstruit la liste temp_fields dans le nouvel ordre
+                        new_order_list = []
+                        for label in sorted_labels:
+                            # On retrouve l'objet correspondant (attention aux doublons de noms, ici on prend le premier trouvé)
+                            for f in st.session_state.temp_fields:
+                                if f"{f['name']}  ::  [{f['type']}]" == label:
+                                    new_order_list.append(f)
+                                    break
+                        st.session_state.temp_fields = new_order_list
+                        # Pas de rerun ici sinon boucle infinie, l'état est mis à jour pour la sauvegarde
+
+                    if st.button("💾 SAUVEGARDER LE MODÈLE", type="primary"):
+                        if new_model_name and st.session_state.temp_fields:
+                            supabase.table("collections").insert({
+                                "name": new_model_name,
+                                "activity_id": selected_act_id,
+                                "fields": st.session_state.temp_fields
+                            }).execute()
+                            st.success(f"Modèle '{new_model_name}' créé !")
+                            st.session_state.temp_fields = []
+                            st.rerun()
+                        else:
+                            st.error("Nom du modèle ou champs manquants.")
+
+            # --- SECTION B : LISTE MODÈLES EXISTANTS ---
+            st.write("---")
+            st.write(f"**Modèles existants pour '{selected_act_name}' :**")
+            existing_models = supabase.table("collections").select("*").eq("activity_id", selected_act_id).execute().data
             
-            c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
-            f_name = c_f1.text_input("Nom champ")
-            f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
-            f_req = c_f3.checkbox("Obligatoire ?")
-            
-            if st.button("Ajouter champ"):
-                st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
-            
-            if st.session_state.temp_fields:
-                st.dataframe(pd.DataFrame(st.session_state.temp_fields))
-            
-            if st.button("💾 Sauvegarder Modèle"):
-                supabase.table("collections").insert({
-                    "name": col_name, "activity_id": act_id_sel, "fields": st.session_state.temp_fields
-                }).execute()
-                st.success("Sauvegardé !")
-                st.session_state.temp_fields = []
-                st.rerun()
+            if existing_models:
+                for mod in existing_models:
+                    m_col1, m_col2, m_col3 = st.columns([4, 2, 1])
+                    m_col1.write(f"📄 **{mod['name']}**")
+                    m_col2.caption(f"{len(mod['fields'])} champs")
+                    if m_col3.button("🗑️", key=f"del_mod_{mod['id']}"):
+                        supabase.table("collections").delete().eq("id", mod['id']).execute()
+                        st.rerun()
+            else:
+                st.info("Aucun modèle pour cette activité.")
 
 # ONGLET 4 : USERS
 if len(tabs) > 3:
