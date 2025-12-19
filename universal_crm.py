@@ -54,7 +54,6 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
-# Compteurs pour les resets automatiques
 if 'form_reset_id' not in st.session_state:
     st.session_state.form_reset_id = 0
 if 'upload_reset_id' not in st.session_state:
@@ -136,6 +135,46 @@ def upload_file(file, path):
         supabase.storage.from_("fichiers").upload(path, file_bytes, {"content-type": file.type, "upsert": "true"})
         return supabase.storage.from_("fichiers").get_public_url(path)
     except: return None
+
+# --- NOUVELLE FONCTION V24 : FUSION PDF ---
+def merge_files_to_pdf(file_urls):
+    merger = PdfWriter()
+    
+    for url in file_urls:
+        try:
+            # Téléchargement du fichier
+            response = requests.get(url)
+            if response.status_code == 200:
+                f_data = io.BytesIO(response.content)
+                
+                # Detection basique extension via URL
+                lower_url = url.lower()
+                
+                if lower_url.endswith('.pdf'):
+                    reader = PdfReader(f_data)
+                    for page in reader.pages:
+                        merger.add_page(page)
+                        
+                elif lower_url.endswith(('.png', '.jpg', '.jpeg')):
+                    # Conversion Image -> PDF
+                    img = Image.open(f_data)
+                    if img.mode == 'RGBA':
+                        img = img.convert('RGB')
+                    
+                    img_pdf_bytes = io.BytesIO()
+                    img.save(img_pdf_bytes, format='PDF')
+                    img_pdf_bytes.seek(0)
+                    
+                    reader = PdfReader(img_pdf_bytes)
+                    merger.add_page(reader.pages[0])
+                    
+        except Exception as e:
+            print(f"Erreur fusion {url}: {e}")
+            continue
+            
+    output = io.BytesIO()
+    merger.write(output)
+    return output.getvalue()
 
 # ==========================================
 # 🔐 PAGE DE LOGIN
@@ -389,7 +428,7 @@ with tabs[0]:
                         time.sleep(1)
                         st.rerun()
 
-# ONGLET 2 : GESTION (V23 - RESET UPLOAD CORRECT)
+# ONGLET 2 : GESTION
 with tabs[1]:
     st.header("📂 Gestion des Dossiers")
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
@@ -448,9 +487,13 @@ with tabs[1]:
 
                     st.divider()
                     
-                    # ZONE 2 : FICHIERS (V23 - KEY DYNAMIQUE)
+                    # ZONE 2 : FICHIERS
                     st.subheader("📂 Gestion des Fichiers")
                     file_fields = [f for f in fields_def if f['type'] == "Fichier/Image"]
+                    
+                    # Compteur global de fichiers pour ce dossier
+                    total_files_count = 0
+                    all_files_urls = []
                     
                     if not file_fields:
                         st.info("Pas de champs fichiers.")
@@ -459,6 +502,10 @@ with tabs[1]:
                             fname = ff['name']
                             existing_urls = current_data.get(fname, [])
                             if not isinstance(existing_urls, list): existing_urls = []
+                            
+                            # On ajoute au compteur global
+                            total_files_count += len(existing_urls)
+                            all_files_urls.extend(existing_urls)
                             
                             with st.expander(f"📁 {fname} ({len(existing_urls)} fichiers)", expanded=True):
                                 if existing_urls:
@@ -476,7 +523,6 @@ with tabs[1]:
                                 else: st.caption("Vide.")
                                 
                                 st.write("---")
-                                # KEY DYNAMIQUE ICI
                                 upload_key = f"up_{r['id']}_{fname}_{st.session_state.upload_reset_id}"
                                 new_files = st.file_uploader(f"Ajout {fname}", accept_multiple_files=True, key=upload_key, label_visibility="collapsed")
                                 
@@ -492,12 +538,29 @@ with tabs[1]:
                                             current_data[fname] = final_list
                                             supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
                                             st.success("Ajouté !")
-                                            
-                                            # INCREMENT DU COMPTEUR POUR RESET L'UPLOADER
                                             st.session_state.upload_reset_id += 1
                                             time.sleep(1)
                                             st.rerun()
                     
+                    # --- ZONE 3 : GENERATEUR PDF COMPLET (V24) ---
+                    if total_files_count >= 2:
+                        st.divider()
+                        st.subheader("🖨️ Fusionner les documents")
+                        st.caption("Générez un PDF unique contenant tous les fichiers du dossier.")
+                        
+                        if st.button("📄 GÉNÉRER LE DOSSIER COMPLET (PDF)", use_container_width=True, type="primary"):
+                            with st.spinner("Fusion des documents en cours..."):
+                                pdf_data = merge_files_to_pdf(all_files_urls)
+                                st.success("PDF généré !")
+                                st.download_button(
+                                    label="📥 Télécharger le Dossier Complet",
+                                    data=pdf_data,
+                                    file_name=f"Dossier_Complet_{r['id']}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True
+                                )
+
+                    # ZONE 4 : SUPPRESSION DOSSIER
                     if MY_ROLE in ["admin", "super_admin"]:
                         st.divider()
                         st.markdown("### ⚠️ Zone de Danger")
