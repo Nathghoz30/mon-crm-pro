@@ -136,42 +136,28 @@ def upload_file(file, path):
         return supabase.storage.from_("fichiers").get_public_url(path)
     except: return None
 
-# --- NOUVELLE FONCTION V24 : FUSION PDF ---
+# --- FONCTION FUSION PDF ---
 def merge_files_to_pdf(file_urls):
     merger = PdfWriter()
-    
     for url in file_urls:
         try:
-            # Téléchargement du fichier
             response = requests.get(url)
             if response.status_code == 200:
                 f_data = io.BytesIO(response.content)
-                
-                # Detection basique extension via URL
                 lower_url = url.lower()
-                
                 if lower_url.endswith('.pdf'):
                     reader = PdfReader(f_data)
                     for page in reader.pages:
                         merger.add_page(page)
-                        
                 elif lower_url.endswith(('.png', '.jpg', '.jpeg')):
-                    # Conversion Image -> PDF
                     img = Image.open(f_data)
-                    if img.mode == 'RGBA':
-                        img = img.convert('RGB')
-                    
+                    if img.mode == 'RGBA': img = img.convert('RGB')
                     img_pdf_bytes = io.BytesIO()
                     img.save(img_pdf_bytes, format='PDF')
                     img_pdf_bytes.seek(0)
-                    
                     reader = PdfReader(img_pdf_bytes)
                     merger.add_page(reader.pages[0])
-                    
-        except Exception as e:
-            print(f"Erreur fusion {url}: {e}")
-            continue
-            
+        except Exception as e: print(f"Erreur fusion {url}: {e}")
     output = io.BytesIO()
     merger.write(output)
     return output.getvalue()
@@ -428,7 +414,7 @@ with tabs[0]:
                         time.sleep(1)
                         st.rerun()
 
-# ONGLET 2 : GESTION
+# ONGLET 2 : GESTION (V25 - NOMMAGE INTELLIGENT)
 with tabs[1]:
     st.header("📂 Gestion des Dossiers")
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
@@ -491,7 +477,6 @@ with tabs[1]:
                     st.subheader("📂 Gestion des Fichiers")
                     file_fields = [f for f in fields_def if f['type'] == "Fichier/Image"]
                     
-                    # Compteur global de fichiers pour ce dossier
                     total_files_count = 0
                     all_files_urls = []
                     
@@ -502,8 +487,6 @@ with tabs[1]:
                             fname = ff['name']
                             existing_urls = current_data.get(fname, [])
                             if not isinstance(existing_urls, list): existing_urls = []
-                            
-                            # On ajoute au compteur global
                             total_files_count += len(existing_urls)
                             all_files_urls.extend(existing_urls)
                             
@@ -542,25 +525,43 @@ with tabs[1]:
                                             time.sleep(1)
                                             st.rerun()
                     
-                    # --- ZONE 3 : GENERATEUR PDF COMPLET (V24) ---
+                    # --- ZONE 3 : GENERATEUR PDF COMPLET (V25 - NOMMAGE) ---
                     if total_files_count >= 2:
                         st.divider()
                         st.subheader("🖨️ Fusionner les documents")
-                        st.caption("Générez un PDF unique contenant tous les fichiers du dossier.")
                         
                         if st.button("📄 GÉNÉRER LE DOSSIER COMPLET (PDF)", use_container_width=True, type="primary"):
                             with st.spinner("Fusion des documents en cours..."):
                                 pdf_data = merge_files_to_pdf(all_files_urls)
+                                
+                                # LOGIQUE NOMMAGE INTELLIGENT
+                                d_data = r['data']
+                                cl_name = next((v for k, v in d_data.items() if "nom" in k.lower() and "entreprise" not in k.lower() and "sociale" not in k.lower()), "").strip()
+                                co_name = next((v for k, v in d_data.items() if any(x in k.lower() for x in ["raison sociale", "société", "entreprise"])), "").strip()
+                                d_date = r['created_at'][:10]
+
+                                if not cl_name and not co_name:
+                                    file_n = f"Dossier_Complet_{r['id']}.pdf"
+                                else:
+                                    parts = ["Dossier_Complet"]
+                                    if cl_name: parts.append(cl_name)
+                                    if co_name: parts.append(co_name)
+                                    parts.append(d_date)
+                                    # Nettoyage regex
+                                    raw_str = "_".join(parts)
+                                    safe_str = re.sub(r'[^a-zA-Z0-9_\-]', '_', raw_str)
+                                    file_n = f"{safe_str}.pdf"
+
                                 st.success("PDF généré !")
                                 st.download_button(
                                     label="📥 Télécharger le Dossier Complet",
                                     data=pdf_data,
-                                    file_name=f"Dossier_Complet_{r['id']}.pdf",
+                                    file_name=file_n,
                                     mime="application/pdf",
                                     use_container_width=True
                                 )
 
-                    # ZONE 4 : SUPPRESSION DOSSIER
+                    # ZONE 4 : SUPPRESSION
                     if MY_ROLE in ["admin", "super_admin"]:
                         st.divider()
                         st.markdown("### ⚠️ Zone de Danger")
