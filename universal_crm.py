@@ -259,6 +259,7 @@ with tabs[0]:
     if not activities:
         st.info("⚠️ Aucune activité configurée.")
     else:
+        # MENU DÉROULANT ACTIVITÉ 1 (ID OK)
         act_choice = st.selectbox("Activité", [a['name'] for a in activities])
         act_id = next(a['id'] for a in activities if a['name'] == act_choice)
         
@@ -440,7 +441,8 @@ if len(tabs) > 2:
             st.warning("Créez d'abord une activité.")
         else:
             act_names = [a['name'] for a in current_acts]
-            selected_act_name = st.selectbox("Activité", act_names)
+            # MENU DÉROULANT ACTIVITÉ 2 (CORRIGÉ AVEC KEY)
+            selected_act_name = st.selectbox("Activité", act_names, key="config_act_selection")
             selected_act_id = next(a['id'] for a in current_acts if a['name'] == selected_act_name)
             
             # A. CRÉATION
@@ -493,7 +495,7 @@ if len(tabs) > 2:
                             st.session_state.temp_fields = []
                             st.rerun()
 
-            # B. MODIFICATION (NOUVEAU V15)
+            # B. MODIFICATION
             st.write("---")
             st.write(f"**Gérer les modèles existants :**")
             
@@ -501,15 +503,13 @@ if len(tabs) > 2:
             
             if existing_models:
                 for mod in existing_models:
-                    # Chaque modèle est un expander
                     with st.expander(f"📝 {mod['name']} (Modifier)", expanded=False):
                         st.info("💡 Changez l'ordre des champs puis cliquez sur 'Valider'.")
                         
-                        # Data pour le tri
                         curr_fields = mod['fields']
                         f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
                         
-                        # Widget tri (clé unique indispensable)
+                        # Tri
                         s_labels = sort_items(f_labels, direction='vertical', key=f"sort_{mod['id']}")
                         
                         col_s, col_d = st.columns([3, 1])
