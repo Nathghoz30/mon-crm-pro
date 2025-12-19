@@ -402,63 +402,56 @@ with tabs[1]:
     else:
         st.info("Pas d'activités.")
 
-# ONGLET 3 : CONFIG (VERSION COMPLETE V14)
+# ONGLET 3 : CONFIG
 if len(tabs) > 2:
     with tabs[2]:
         st.header("⚙️ Configuration Avancée")
         
-        # --- 1. GESTION DES ACTIVITÉS ---
+        # --- 1. ACTIVITÉS ---
         st.subheader("1. Activités")
         c1, c2 = st.columns([1, 2])
-        
-        # Ajout
         with c1:
             with st.form("new_act_v14"):
                 n_act = st.text_input("Ajouter une activité", placeholder="Ex: Isolation")
                 if st.form_submit_button("Ajouter"):
                     if n_act:
                         supabase.table("activities").insert({"name": n_act, "company_id": MY_COMPANY_ID}).execute()
-                        st.success("Activité ajoutée !")
+                        st.success("Ajouté !")
                         st.rerun()
-        
-        # Liste & Suppression
         with c2:
-            st.write("**Activités existantes :**")
+            st.write("**Existantes :**")
             current_acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
             if current_acts:
                 for act in current_acts:
-                    col_a, col_b = st.columns([4, 1])
-                    col_a.info(f"📌 {act['name']}")
-                    if col_b.button("🗑️", key=f"del_act_{act['id']}"):
+                    ca, cb = st.columns([4, 1])
+                    ca.info(f"📌 {act['name']}")
+                    if cb.button("🗑️", key=f"del_act_{act['id']}"):
                         supabase.table("activities").delete().eq("id", act['id']).execute()
                         st.rerun()
             else:
-                st.caption("Aucune activité.")
+                st.caption("Vide.")
 
         st.divider()
 
-        # --- 2. GESTION DES MODÈLES ---
+        # --- 2. MODÈLES ---
         st.subheader("2. Modèles de Dossiers")
         
         if not current_acts:
-            st.warning("Veuillez d'abord créer une activité.")
+            st.warning("Créez d'abord une activité.")
         else:
-            # Sélection de l'activité parente
             act_names = [a['name'] for a in current_acts]
-            selected_act_name = st.selectbox("Sélectionner l'activité", act_names)
+            selected_act_name = st.selectbox("Activité", act_names)
             selected_act_id = next(a['id'] for a in current_acts if a['name'] == selected_act_name)
             
-            # --- SECTION A : CRÉER NOUVEAU MODÈLE ---
+            # A. CRÉATION
             with st.expander("➕ Créer un nouveau modèle", expanded=False):
                 st.markdown("#### Nouveau Modèle")
-                new_model_name = st.text_input("Nom du modèle (ex: Audit RGE)")
+                new_model_name = st.text_input("Nom du modèle")
                 
-                if "temp_fields" not in st.session_state:
-                    st.session_state.temp_fields = []
+                if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
 
-                # Formulaire d'ajout de champ
                 c_f1, c_f2, c_f3, c_f4 = st.columns([3, 2, 1, 1])
-                f_name = c_f1.text_input("Nom du champ")
+                f_name = c_f1.text_input("Nom champ")
                 f_type = c_f2.selectbox("Type", ["Texte Court", "Texte Long", "Date", "SIRET", "Adresse", "Adresse Travaux", "Section/Titre", "Fichier/Image"])
                 f_req = c_f3.checkbox("Obligatoire ?", value=False)
                 
@@ -467,67 +460,78 @@ if len(tabs) > 2:
                         st.session_state.temp_fields.append({"name": f_name, "type": f_type, "required": f_req})
                         st.rerun()
 
-                # --- ZONE DRAG & DROP ET SUPPRESSION ---
                 if st.session_state.temp_fields:
                     st.write("---")
-                    st.write("🔧 **Organiser les champs :** (Glisser-déposer pour trier, Croix pour supprimer)")
-                    
-                    # 1. Gestion Suppression (Liste simple avec bouton X)
                     for idx, f in enumerate(st.session_state.temp_fields):
                         cols = st.columns([0.5, 4, 2, 1])
-                        cols[0].write(f"{idx+1}.")
+                        cols[0].write(f"{idx+1}")
                         cols[1].write(f"**{f['name']}**")
                         cols[2].caption(f"{f['type']}")
-                        if cols[3].button("❌", key=f"rm_field_{idx}"):
+                        if cols[3].button("❌", key=f"rm_{idx}"):
                             st.session_state.temp_fields.pop(idx)
                             st.rerun()
                     
-                    # 2. Gestion Ordre (Sortable)
-                    st.info("👇 Utilisez la liste ci-dessous pour changer l'ordre (Drag & Drop)")
-                    field_labels = [f"{f['name']}  ::  [{f['type']}]" for f in st.session_state.temp_fields]
-                    sorted_labels = sort_items(field_labels, direction='vertical')
+                    st.info("👇 Glissez-déposez pour trier :")
+                    labels = [f"{f['name']}  ::  [{f['type']}]" for f in st.session_state.temp_fields]
+                    sorted_labels = sort_items(labels, direction='vertical')
                     
-                    # On détecte si l'ordre a changé
-                    if sorted_labels and sorted_labels != field_labels:
-                        # On reconstruit la liste temp_fields dans le nouvel ordre
-                        new_order_list = []
-                        for label in sorted_labels:
-                            # On retrouve l'objet correspondant (attention aux doublons de noms, ici on prend le premier trouvé)
+                    if sorted_labels != labels:
+                        new_order = []
+                        for l in sorted_labels:
                             for f in st.session_state.temp_fields:
-                                if f"{f['name']}  ::  [{f['type']}]" == label:
-                                    new_order_list.append(f)
+                                if f"{f['name']}  ::  [{f['type']}]" == l:
+                                    new_order.append(f)
                                     break
-                        st.session_state.temp_fields = new_order_list
-                        # Pas de rerun ici sinon boucle infinie, l'état est mis à jour pour la sauvegarde
+                        st.session_state.temp_fields = new_order
 
                     if st.button("💾 SAUVEGARDER LE MODÈLE", type="primary"):
-                        if new_model_name and st.session_state.temp_fields:
+                        if new_model_name:
                             supabase.table("collections").insert({
-                                "name": new_model_name,
-                                "activity_id": selected_act_id,
-                                "fields": st.session_state.temp_fields
+                                "name": new_model_name, "activity_id": selected_act_id, "fields": st.session_state.temp_fields
                             }).execute()
-                            st.success(f"Modèle '{new_model_name}' créé !")
+                            st.success("Modèle créé !")
                             st.session_state.temp_fields = []
                             st.rerun()
-                        else:
-                            st.error("Nom du modèle ou champs manquants.")
 
-            # --- SECTION B : LISTE MODÈLES EXISTANTS ---
+            # B. MODIFICATION (NOUVEAU V15)
             st.write("---")
-            st.write(f"**Modèles existants pour '{selected_act_name}' :**")
+            st.write(f"**Gérer les modèles existants :**")
+            
             existing_models = supabase.table("collections").select("*").eq("activity_id", selected_act_id).execute().data
             
             if existing_models:
                 for mod in existing_models:
-                    m_col1, m_col2, m_col3 = st.columns([4, 2, 1])
-                    m_col1.write(f"📄 **{mod['name']}**")
-                    m_col2.caption(f"{len(mod['fields'])} champs")
-                    if m_col3.button("🗑️", key=f"del_mod_{mod['id']}"):
-                        supabase.table("collections").delete().eq("id", mod['id']).execute()
-                        st.rerun()
+                    # Chaque modèle est un expander
+                    with st.expander(f"📝 {mod['name']} (Modifier)", expanded=False):
+                        st.info("💡 Changez l'ordre des champs puis cliquez sur 'Valider'.")
+                        
+                        # Data pour le tri
+                        curr_fields = mod['fields']
+                        f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
+                        
+                        # Widget tri (clé unique indispensable)
+                        s_labels = sort_items(f_labels, direction='vertical', key=f"sort_{mod['id']}")
+                        
+                        col_s, col_d = st.columns([3, 1])
+                        
+                        if col_s.button("💾 Valider le nouvel ordre", key=f"save_{mod['id']}"):
+                            new_list = []
+                            for l in s_labels:
+                                for f in curr_fields:
+                                    if f"{f['name']}  ::  [{f['type']}]" == l:
+                                        new_list.append(f)
+                                        break
+                            
+                            supabase.table("collections").update({"fields": new_list}).eq("id", mod['id']).execute()
+                            st.success("Ordre mis à jour !")
+                            time.sleep(1)
+                            st.rerun()
+                            
+                        if col_d.button("🗑️ Supprimer", key=f"del_{mod['id']}", type="primary"):
+                            supabase.table("collections").delete().eq("id", mod['id']).execute()
+                            st.rerun()
             else:
-                st.info("Aucun modèle pour cette activité.")
+                st.caption("Aucun modèle ici.")
 
 # ONGLET 4 : USERS
 if len(tabs) > 3:
