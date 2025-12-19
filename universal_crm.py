@@ -54,8 +54,11 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
+# Compteurs pour les resets automatiques
 if 'form_reset_id' not in st.session_state:
     st.session_state.form_reset_id = 0
+if 'upload_reset_id' not in st.session_state:
+    st.session_state.upload_reset_id = 0
 
 # --- RECONNEXION AUTO ---
 if not st.session_state.user:
@@ -386,7 +389,7 @@ with tabs[0]:
                         time.sleep(1)
                         st.rerun()
 
-# ONGLET 2 : GESTION (V22 - SELECTION PRO & SUPPRESSION)
+# ONGLET 2 : GESTION (V23 - RESET UPLOAD CORRECT)
 with tabs[1]:
     st.header("📂 Gestion des Dossiers")
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
@@ -402,13 +405,10 @@ with tabs[1]:
             if recs:
                 st.write(f"**{len(recs)} dossiers trouvés**")
                 
-                # --- CONSTRUCTION DE LA LISTE INTELLIGENTE (V22) ---
                 search_map = {}
                 for r in recs:
                     d = r['data']
-                    # Cherche le nom du client (champs 'nom' ou 'client')
                     client_name = next((v for k, v in d.items() if "nom" in k.lower() and "entreprise" not in k.lower() and "sociale" not in k.lower()), "Client Inconnu")
-                    # Cherche l'entreprise (raison sociale)
                     company_name = next((v for k, v in d.items() if any(x in k.lower() for x in ["raison sociale", "société", "entreprise"])), "")
                     
                     label_parts = [f"👤 {client_name}"]
@@ -448,7 +448,7 @@ with tabs[1]:
 
                     st.divider()
                     
-                    # ZONE 2 : FICHIERS
+                    # ZONE 2 : FICHIERS (V23 - KEY DYNAMIQUE)
                     st.subheader("📂 Gestion des Fichiers")
                     file_fields = [f for f in fields_def if f['type'] == "Fichier/Image"]
                     
@@ -476,7 +476,10 @@ with tabs[1]:
                                 else: st.caption("Vide.")
                                 
                                 st.write("---")
-                                new_files = st.file_uploader(f"Ajout {fname}", accept_multiple_files=True, key=f"up_{r['id']}_{fname}", label_visibility="collapsed")
+                                # KEY DYNAMIQUE ICI
+                                upload_key = f"up_{r['id']}_{fname}_{st.session_state.upload_reset_id}"
+                                new_files = st.file_uploader(f"Ajout {fname}", accept_multiple_files=True, key=upload_key, label_visibility="collapsed")
+                                
                                 if new_files:
                                     if st.button(f"Envoyer", key=f"send_{r['id']}_{fname}"):
                                         with st.spinner("Envoi..."):
@@ -489,10 +492,12 @@ with tabs[1]:
                                             current_data[fname] = final_list
                                             supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
                                             st.success("Ajouté !")
+                                            
+                                            # INCREMENT DU COMPTEUR POUR RESET L'UPLOADER
+                                            st.session_state.upload_reset_id += 1
                                             time.sleep(1)
                                             st.rerun()
                     
-                    # ZONE 3 : SUPPRESSION DOSSIER (ADMIN ONLY) - V22
                     if MY_ROLE in ["admin", "super_admin"]:
                         st.divider()
                         st.markdown("### ⚠️ Zone de Danger")
