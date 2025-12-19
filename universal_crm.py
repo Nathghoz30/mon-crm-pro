@@ -54,7 +54,6 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
-# Variable magique pour le RESET TOTAL du formulaire
 if 'form_reset_id' not in st.session_state:
     st.session_state.form_reset_id = 0
 
@@ -273,20 +272,17 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
-            # ID Unique pour cette session de formulaire
             FORM_ID = st.session_state.form_reset_id
             
             # --- AUTO FILL SIRET ---
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
-                    # Clé dynamique pour le reset
                     siret_in = c_s.text_input("SIRET", label_visibility="collapsed", key=f"siret_search_{FORM_ID}")
                     if c_b.button("Remplir"):
                         infos = get_siret_info(siret_in)
                         if infos:
                             for i, f in enumerate(fields):
-                                # On cible la clé dynamique
                                 key = f"f_{sel_col['id']}_{i}_{f['name']}_{FORM_ID}"
                                 n = f['name'].lower()
                                 val = None
@@ -309,7 +305,6 @@ with tabs[0]:
             main_addr = ""
             
             for i, f in enumerate(fields):
-                # CLÉ DYNAMIQUE FONDAMENTALE : change après chaque envoi
                 key = f"f_{sel_col['id']}_{i}_{f['name']}_{FORM_ID}"
                 lbl = f"{f['name']} *" if f.get('required') else f['name']
                 
@@ -332,12 +327,10 @@ with tabs[0]:
                     main_addr = val 
                     
                 elif f['type'] == "Adresse Travaux":
-                    # CHECKBOX avec clé dynamique aussi
                     use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
-                    
                     if use_same:
                         st.session_state[key] = main_addr
-                        val = st.text_input(lbl, key=key, disabled=True) # VERROUILLAGE
+                        val = st.text_input(lbl, key=key, disabled=True)
                         data[f['name']] = main_addr
                     else:
                         val = st.text_input(lbl, key=key, disabled=False)
@@ -348,7 +341,6 @@ with tabs[0]:
                     data[f['name']] = val
                         
                 elif f['type'] == "Fichier/Image":
-                    # KEY dynamique permet le reset de l'uploader
                     files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                     
                 else: 
@@ -361,7 +353,6 @@ with tabs[0]:
                 missing = []
                 for f in fields:
                     if f.get('required') and f['type'] not in ["Section/Titre", "Fichier/Image"]:
-                         # On vérifie la clé dynamique actuelle
                          k = f"f_{sel_col['id']}_{fields.index(f)}_{f['name']}_{FORM_ID}"
                          if not st.session_state.get(k):
                              missing.append(f['name'])
@@ -385,13 +376,17 @@ with tabs[0]:
                         
                         st.success("✅ Dossier créé avec succès !")
                         
-                        # --- RESET TOTAL (MÉTHODE ID) ---
-                        # On incrémente l'ID, ce qui invalide toutes les clés précédentes
+                        for k in list(st.session_state.keys()):
+                            if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
+                        
+                        if "siret_search_bar" in st.session_state:
+                            del st.session_state["siret_search_bar"]
+                        
                         st.session_state.form_reset_id += 1
                         time.sleep(1)
                         st.rerun()
 
-# ONGLET 2 : GESTION (REFONTE TOTALE V19)
+# ONGLET 2 : GESTION (V22 - SELECTION PRO & SUPPRESSION)
 with tabs[1]:
     st.header("📂 Gestion des Dossiers")
     my_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
@@ -402,14 +397,28 @@ with tabs[1]:
         
         if my_cols:
             col_ids = [c['id'] for c in my_cols]
-            # On récupère tous les dossiers
             recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", col_ids).order('created_at', desc=True).execute().data
             
             if recs:
                 st.write(f"**{len(recs)} dossiers trouvés**")
                 
-                # SÉLECTION DU DOSSIER
-                search_map = {f"#{r['id']} | {r['collections']['name']} | Créé le {r['created_at'][:10]}": r for r in recs}
+                # --- CONSTRUCTION DE LA LISTE INTELLIGENTE (V22) ---
+                search_map = {}
+                for r in recs:
+                    d = r['data']
+                    # Cherche le nom du client (champs 'nom' ou 'client')
+                    client_name = next((v for k, v in d.items() if "nom" in k.lower() and "entreprise" not in k.lower() and "sociale" not in k.lower()), "Client Inconnu")
+                    # Cherche l'entreprise (raison sociale)
+                    company_name = next((v for k, v in d.items() if any(x in k.lower() for x in ["raison sociale", "société", "entreprise"])), "")
+                    
+                    label_parts = [f"👤 {client_name}"]
+                    if company_name: label_parts.append(f"🏢 {company_name}")
+                    label_parts.append(f"📄 {r['collections']['name']}")
+                    label_parts.append(f"📅 {r['created_at'][:10]}")
+                    
+                    full_label = "  |  ".join(label_parts)
+                    search_map[full_label] = r
+
                 sel_label = st.selectbox("Sélectionner le dossier à gérer :", list(search_map.keys()))
                 
                 if sel_label:
@@ -419,115 +428,95 @@ with tabs[1]:
                     
                     st.divider()
                     
-                    # --- ZONE 1 : MODIFICATION DES DONNÉES (FORMULAIRE) ---
+                    # ZONE 1 : MODIF
                     st.subheader("📝 Modifier les informations")
-                    
                     with st.form(f"edit_form_{r['id']}"):
                         updated_data = current_data.copy()
-                        
-                        # On boucle sur les champs pour afficher les inputs pré-remplis
                         for f in fields_def:
                             f_name = f['name']
                             f_type = f['type']
-                            
-                            # On ne traite pas les fichiers ici, mais dans la zone 2
-                            if f_type == "Fichier/Image":
-                                continue
-                                
+                            if f_type == "Fichier/Image": continue
                             current_val = current_data.get(f_name, "")
-                            
-                            if f_type == "Section/Titre":
-                                st.markdown(f"**{f_name}**")
-                            else:
-                                # Pour tout ce qui est texte/adresse/siret etc.
-                                updated_data[f_name] = st.text_input(f_name, value=current_val)
+                            if f_type == "Section/Titre": st.markdown(f"**{f_name}**")
+                            else: updated_data[f_name] = st.text_input(f_name, value=current_val)
                         
                         if st.form_submit_button("💾 Sauvegarder les modifications"):
                             supabase.table("records").update({"data": updated_data}).eq("id", r['id']).execute()
-                            st.success("Informations mises à jour !")
+                            st.success("Mis à jour !")
                             time.sleep(1)
                             st.rerun()
 
                     st.divider()
                     
-                    # --- ZONE 2 : GESTION DES FICHIERS (INTERACTIVE) ---
+                    # ZONE 2 : FICHIERS
                     st.subheader("📂 Gestion des Fichiers")
-                    
                     file_fields = [f for f in fields_def if f['type'] == "Fichier/Image"]
                     
                     if not file_fields:
-                        st.info("Ce modèle ne contient pas de champs 'Fichier'.")
+                        st.info("Pas de champs fichiers.")
                     else:
                         for ff in file_fields:
                             fname = ff['name']
-                            # Récupération de la liste actuelle des URLs (ou liste vide)
                             existing_urls = current_data.get(fname, [])
                             if not isinstance(existing_urls, list): existing_urls = []
                             
                             with st.expander(f"📁 {fname} ({len(existing_urls)} fichiers)", expanded=True):
-                                
-                                # A. LISTE DES FICHIERS EXISTANTS
                                 if existing_urls:
                                     for i, url in enumerate(existing_urls):
                                         c_view, c_del = st.columns([4, 1])
-                                        # On essaie d'extraire un nom propre de l'URL
                                         display_name = url.split('/')[-1] if '/' in url else f"Fichier {i+1}"
-                                        
                                         c_view.markdown(f"📄 [{display_name}]({url})")
-                                        
-                                        # BOUTON SUPPRIMER
                                         if c_del.button("❌", key=f"del_file_{r['id']}_{fname}_{i}"):
-                                            # On retire l'URL de la liste locale
                                             new_url_list = [u for u in existing_urls if u != url]
-                                            # On met à jour le JSON global
                                             current_data[fname] = new_url_list
-                                            # On update la DB
                                             supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
-                                            st.toast("Fichier supprimé !")
+                                            st.toast("Supprimé !")
                                             time.sleep(0.5)
                                             st.rerun()
-                                else:
-                                    st.caption("Aucun fichier pour le moment.")
+                                else: st.caption("Vide.")
                                 
-                                # B. AJOUT DE NOUVEAUX FICHIERS
                                 st.write("---")
-                                st.caption(f"Ajouter dans '{fname}' :")
-                                new_files = st.file_uploader(f"Upload {fname}", accept_multiple_files=True, key=f"up_{r['id']}_{fname}", label_visibility="collapsed")
-                                
+                                new_files = st.file_uploader(f"Ajout {fname}", accept_multiple_files=True, key=f"up_{r['id']}_{fname}", label_visibility="collapsed")
                                 if new_files:
-                                    if st.button(f"Envoyer {len(new_files)} fichier(s) dans {fname}", key=f"send_{r['id']}_{fname}"):
-                                        with st.spinner("Envoi en cours..."):
+                                    if st.button(f"Envoyer", key=f"send_{r['id']}_{fname}"):
+                                        with st.spinner("Envoi..."):
                                             added_urls = []
                                             for nf in new_files:
-                                                # Upload Supabase Storage
                                                 path = f"{MY_COMPANY_ID}/{r['collection_id']}/{r['id']}_{int(time.time())}_{nf.name}"
                                                 pub_url = upload_file(nf, path)
-                                                if pub_url:
-                                                    added_urls.append(pub_url)
-                                            
-                                            # Fusion avec les anciens
+                                                if pub_url: added_urls.append(pub_url)
                                             final_list = existing_urls + added_urls
                                             current_data[fname] = final_list
-                                            
-                                            # Save DB
                                             supabase.table("records").update({"data": current_data}).eq("id", r['id']).execute()
-                                            st.success("Fichiers ajoutés !")
+                                            st.success("Ajouté !")
                                             time.sleep(1)
                                             st.rerun()
+                    
+                    # ZONE 3 : SUPPRESSION DOSSIER (ADMIN ONLY) - V22
+                    if MY_ROLE in ["admin", "super_admin"]:
+                        st.divider()
+                        st.markdown("### ⚠️ Zone de Danger")
+                        with st.expander("Supprimer ce dossier définitivement"):
+                            st.warning("Cette action est irréversible.")
+                            if st.button("💀 Confirmer la suppression du dossier", type="primary"):
+                                supabase.table("records").delete().eq("id", r['id']).execute()
+                                st.success("Dossier supprimé.")
+                                time.sleep(1)
+                                st.rerun()
 
             else:
-                st.info("Aucun dossier enregistré pour le moment.")
+                st.info("Aucun dossier.")
         else:
-            st.info("Pas de modèles de dossier configurés.")
+            st.info("Pas de modèles.")
     else:
-        st.info("Pas d'activités configurées.")
+        st.info("Pas d'activités.")
 
 # ONGLET 3 : CONFIG
 if len(tabs) > 2:
     with tabs[2]:
         st.header("⚙️ Configuration Avancée")
         
-        # --- 1. ACTIVITÉS ---
+        # 1. ACTIVITÉS
         st.subheader("1. Activités")
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -548,27 +537,23 @@ if len(tabs) > 2:
                     if cb.button("🗑️", key=f"del_act_{act['id']}"):
                         supabase.table("activities").delete().eq("id", act['id']).execute()
                         st.rerun()
-            else:
-                st.caption("Vide.")
+            else: st.caption("Vide.")
 
         st.divider()
 
-        # --- 2. MODÈLES ---
+        # 2. MODÈLES
         st.subheader("2. Modèles de Dossiers")
-        
         if not current_acts:
             st.warning("Créez d'abord une activité.")
         else:
             act_names = [a['name'] for a in current_acts]
-            # CLÉ UNIQUE POUR ÉVITER LE BUG DuplicateId
             selected_act_name = st.selectbox("Activité", act_names, key="config_act_selection")
             selected_act_id = next(a['id'] for a in current_acts if a['name'] == selected_act_name)
             
-            # A. CRÉATION NOUVEAU MODÈLE
+            # A. CRÉATION
             with st.expander("➕ Créer un nouveau modèle", expanded=False):
                 st.markdown("#### Nouveau Modèle")
                 new_model_name = st.text_input("Nom du modèle")
-                
                 if "temp_fields" not in st.session_state: st.session_state.temp_fields = []
 
                 c_f1, c_f2, c_f3, c_f4 = st.columns([3, 2, 1, 1])
@@ -614,22 +599,17 @@ if len(tabs) > 2:
                             st.session_state.temp_fields = []
                             st.rerun()
 
-            # B. MODIFICATION (V18 - KEY DYNAMIQUE POUR LE TRI)
+            # B. MODIFICATION
             st.write("---")
             st.write(f"**Gérer les modèles existants :**")
-            
             existing_models = supabase.table("collections").select("*").eq("activity_id", selected_act_id).execute().data
             
             if existing_models:
                 for mod in existing_models:
                     with st.expander(f"📝 {mod['name']} (Modifier)", expanded=False):
-                        
-                        # Compteur pour rafraîchir le composant de tri
                         tracker_key = f"update_counter_{mod['id']}"
-                        if tracker_key not in st.session_state:
-                            st.session_state[tracker_key] = 0
+                        if tracker_key not in st.session_state: st.session_state[tracker_key] = 0
 
-                        # 1. AJOUTER UN CHAMP
                         st.markdown("##### ➕ Ajouter un champ")
                         c_a1, c_a2, c_a3, c_a4 = st.columns([3, 2, 1, 1])
                         n_fn = c_a1.text_input("Nom", key=f"n_fn_{mod['id']}")
@@ -641,68 +621,51 @@ if len(tabs) > 2:
                                 new_field = {"name": n_fn, "type": n_ft, "required": n_fr}
                                 updated_fields = mod['fields'] + [new_field]
                                 supabase.table("collections").update({"fields": updated_fields}).eq("id", mod['id']).execute()
-                                # On force le refresh du tri
                                 st.session_state[tracker_key] += 1
                                 st.success("Champ ajouté !")
                                 time.sleep(0.5)
                                 st.rerun()
 
-                        # 2. SUPPRIMER DES CHAMPS
                         st.markdown("##### 🗑️ Supprimer des champs")
                         curr_fields = mod['fields']
                         field_names = [f['name'] for f in curr_fields]
-                        
                         to_delete = st.multiselect("Sélectionnez les champs à supprimer :", field_names, key=f"del_sel_{mod['id']}")
                         
                         if to_delete:
-                            if st.button(f"Confirmer la suppression de {len(to_delete)} champ(s)", key=f"conf_del_{mod['id']}"):
+                            if st.button(f"Confirmer la suppression", key=f"conf_del_{mod['id']}"):
                                 remaining_fields = [f for f in curr_fields if f['name'] not in to_delete]
                                 supabase.table("collections").update({"fields": remaining_fields}).eq("id", mod['id']).execute()
-                                # On force le refresh du tri
                                 st.session_state[tracker_key] += 1
-                                st.success("Champs supprimés !")
+                                st.success("Supprimé !")
                                 time.sleep(0.5)
                                 st.rerun()
 
-                        # 3. TRIER (Key dynamique utilisée ici)
                         st.markdown("##### 🔃 Réorganiser l'ordre")
-                        st.caption("Glissez-déposez puis cliquez sur Valider.")
-                        
                         current_f_labels = [f"{f['name']}  ::  [{f['type']}]" for f in curr_fields]
-                        
-                        # LA CLÉ MAGIQUE QUI CHANGE À CHAQUE UPDATE
                         dynamic_sort_key = f"sort_{mod['id']}_{st.session_state[tracker_key]}"
-                        
                         sorted_f_labels = sort_items(current_f_labels, direction='vertical', key=dynamic_sort_key)
                         
                         col_valid, col_delete_mod = st.columns([3, 1])
-                        
                         if col_valid.button("💾 Valider le nouvel ordre", key=f"save_ord_{mod['id']}"):
                             final_list = []
-                            # Reconstitution de la liste dans le bon ordre
                             for l in sorted_f_labels:
                                 for f in curr_fields:
                                     if f"{f['name']}  ::  [{f['type']}]" == l:
                                         final_list.append(f)
                                         break
-                            
-                            # Sécurité : on ajoute à la fin les champs orphelins (si bug de mapping)
-                            existing_names_in_sorted = [x['name'] for x in final_list]
+                            existing_names = [x['name'] for x in final_list]
                             for f in curr_fields:
-                                if f['name'] not in existing_names_in_sorted:
-                                    final_list.append(f)
+                                if f['name'] not in existing_names: final_list.append(f)
 
                             supabase.table("collections").update({"fields": final_list}).eq("id", mod['id']).execute()
-                            st.success("Ordre sauvegardé !")
+                            st.success("Sauvegardé !")
                             time.sleep(0.5)
                             st.rerun()
                             
-                        # 4. SUPPRIMER LE MODÈLE
-                        if col_delete_mod.button("💀 Supprimer le Modèle", key=f"kill_mod_{mod['id']}", type="primary"):
+                        if col_delete_mod.button("💀 Supprimer Modèle", key=f"kill_mod_{mod['id']}", type="primary"):
                             supabase.table("collections").delete().eq("id", mod['id']).execute()
                             st.rerun()
-            else:
-                st.caption("Aucun modèle ici.")
+            else: st.caption("Aucun modèle ici.")
 
 # ONGLET 4 : USERS
 if len(tabs) > 3:
@@ -722,12 +685,9 @@ if len(tabs) > 3:
                             "role": new_role, "full_name": new_email.split('@')[0]
                         }).execute()
                         st.success("Utilisateur créé !")
-                    else:
-                        st.warning("Problème Auth.")
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
+                    else: st.warning("Problème Auth.")
+                except Exception as e: st.error(f"Erreur : {e}")
             
         st.divider()
         users = supabase.table("profiles").select("email, role, full_name").eq("company_id", MY_COMPANY_ID).execute().data
-        if users:
-            st.dataframe(users)
+        if users: st.dataframe(users)
