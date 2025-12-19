@@ -273,7 +273,8 @@ with tabs[0]:
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
-                    siret_in = c_s.text_input("SIRET", label_visibility="collapsed")
+                    # KEY AJOUTÉE POUR LE RESET
+                    siret_in = c_s.text_input("SIRET", label_visibility="collapsed", key="siret_search_bar")
                     if c_b.button("Remplir"):
                         infos = get_siret_info(siret_in)
                         if infos:
@@ -322,20 +323,25 @@ with tabs[0]:
                     main_addr = val 
                     
                 elif f['type'] == "Adresse Travaux":
+                    # LOGIQUE V20 : LOCKING
                     use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
-                    if use_same and main_addr:
-                        if st.session_state[key] != main_addr:
-                            st.session_state[key] = main_addr
-                            st.rerun()
                     
-                    val = st.text_input(lbl, key=key)
-                    data[f['name']] = val
+                    if use_same:
+                        # On force la valeur et on désactive le champ
+                        st.session_state[key] = main_addr
+                        val = st.text_input(lbl, key=key, disabled=True)
+                        data[f['name']] = main_addr # On s'assure que la data est bien celle du siège
+                    else:
+                        # Champ libre
+                        val = st.text_input(lbl, key=key, disabled=False)
+                        data[f['name']] = val
                 
                 elif f['type'] == "SIRET":
                     val = st.text_input(lbl, key=key)
                     data[f['name']] = val
                         
                 elif f['type'] == "Fichier/Image":
+                    # KEY importante pour le reset
                     files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                     
                 else: 
@@ -370,8 +376,16 @@ with tabs[0]:
                         }).execute()
                         
                         st.success("✅ Dossier créé avec succès !")
+                        
+                        # --- RESET COMPLET V20 ---
+                        # 1. Reset des champs dynamiques (Text, Files, etc.)
                         for k in list(st.session_state.keys()):
                             if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
+                        
+                        # 2. Reset de la barre de recherche SIRET
+                        if "siret_search_bar" in st.session_state:
+                            del st.session_state["siret_search_bar"]
+                            
                         time.sleep(1)
                         st.rerun()
 
