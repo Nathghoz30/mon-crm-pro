@@ -54,6 +54,10 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
+# Variable magique pour le RESET TOTAL du formulaire
+if 'form_reset_id' not in st.session_state:
+    st.session_state.form_reset_id = 0
+
 # --- RECONNEXION AUTO ---
 if not st.session_state.user:
     time.sleep(0.1)
@@ -269,17 +273,21 @@ with tabs[0]:
             sel_col = next(c for c in collections if c['name'] == col_choice)
             fields = sel_col['fields']
             
+            # ID Unique pour cette session de formulaire
+            FORM_ID = st.session_state.form_reset_id
+            
             # --- AUTO FILL SIRET ---
             if any(f['type'] == "SIRET" for f in fields):
                 with st.expander("⚡ Remplissage SIRET", expanded=True):
                     c_s, c_b = st.columns([3, 1])
-                    # KEY AJOUTÉE POUR LE RESET
-                    siret_in = c_s.text_input("SIRET", label_visibility="collapsed", key="siret_search_bar")
+                    # Clé dynamique pour le reset
+                    siret_in = c_s.text_input("SIRET", label_visibility="collapsed", key=f"siret_search_{FORM_ID}")
                     if c_b.button("Remplir"):
                         infos = get_siret_info(siret_in)
                         if infos:
                             for i, f in enumerate(fields):
-                                key = f"f_{sel_col['id']}_{i}_{f['name']}"
+                                # On cible la clé dynamique
+                                key = f"f_{sel_col['id']}_{i}_{f['name']}_{FORM_ID}"
                                 n = f['name'].lower()
                                 val = None
                                 
@@ -301,7 +309,8 @@ with tabs[0]:
             main_addr = ""
             
             for i, f in enumerate(fields):
-                key = f"f_{sel_col['id']}_{i}_{f['name']}"
+                # CLÉ DYNAMIQUE FONDAMENTALE : change après chaque envoi
+                key = f"f_{sel_col['id']}_{i}_{f['name']}_{FORM_ID}"
                 lbl = f"{f['name']} *" if f.get('required') else f['name']
                 
                 if f['type'] != "Fichier/Image" and key not in st.session_state:
@@ -323,16 +332,14 @@ with tabs[0]:
                     main_addr = val 
                     
                 elif f['type'] == "Adresse Travaux":
-                    # LOGIQUE V20 : LOCKING
+                    # CHECKBOX avec clé dynamique aussi
                     use_same = st.checkbox(f"🔽 Copier adresse siège : {main_addr}", key=f"chk_{key}")
                     
                     if use_same:
-                        # On force la valeur et on désactive le champ
                         st.session_state[key] = main_addr
-                        val = st.text_input(lbl, key=key, disabled=True)
-                        data[f['name']] = main_addr # On s'assure que la data est bien celle du siège
+                        val = st.text_input(lbl, key=key, disabled=True) # VERROUILLAGE
+                        data[f['name']] = main_addr
                     else:
-                        # Champ libre
                         val = st.text_input(lbl, key=key, disabled=False)
                         data[f['name']] = val
                 
@@ -341,7 +348,7 @@ with tabs[0]:
                     data[f['name']] = val
                         
                 elif f['type'] == "Fichier/Image":
-                    # KEY importante pour le reset
+                    # KEY dynamique permet le reset de l'uploader
                     files_map[f['name']] = st.file_uploader(lbl, accept_multiple_files=True, key=key)
                     
                 else: 
@@ -354,7 +361,8 @@ with tabs[0]:
                 missing = []
                 for f in fields:
                     if f.get('required') and f['type'] not in ["Section/Titre", "Fichier/Image"]:
-                         k = f"f_{sel_col['id']}_{fields.index(f)}_{f['name']}"
+                         # On vérifie la clé dynamique actuelle
+                         k = f"f_{sel_col['id']}_{fields.index(f)}_{f['name']}_{FORM_ID}"
                          if not st.session_state.get(k):
                              missing.append(f['name'])
                 
@@ -377,15 +385,9 @@ with tabs[0]:
                         
                         st.success("✅ Dossier créé avec succès !")
                         
-                        # --- RESET COMPLET V20 ---
-                        # 1. Reset des champs dynamiques (Text, Files, etc.)
-                        for k in list(st.session_state.keys()):
-                            if k.startswith(f"f_{sel_col['id']}"): del st.session_state[k]
-                        
-                        # 2. Reset de la barre de recherche SIRET
-                        if "siret_search_bar" in st.session_state:
-                            del st.session_state["siret_search_bar"]
-                            
+                        # --- RESET TOTAL (MÉTHODE ID) ---
+                        # On incrémente l'ID, ce qui invalide toutes les clés précédentes
+                        st.session_state.form_reset_id += 1
                         time.sleep(1)
                         st.rerun()
 
