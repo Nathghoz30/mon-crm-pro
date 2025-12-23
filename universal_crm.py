@@ -62,22 +62,32 @@ if not st.session_state.user:
         except: cookie_manager.delete("sb_refresh_token")
 
 # --- FONCTIONS ---
+def login(email, password):
+    try:
+        # 1. Authentification
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if res.user:
+            # 2. Récupération immédiate du profil pour éviter le bug du double-clic
+            p_res = supabase.table("profiles").select("*").eq("id", res.user.id).execute()
+            if p_res.data:
+                st.session_state.user = res.user
+                st.session_state.profile = p_res.data[0]
+                if res.session:
+                    cookie_manager.set("sb_refresh_token", res.session.refresh_token)
+                st.success("Connexion réussie !")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("Profil non trouvé. Contactez le Super Admin.")
+    except Exception as e:
+        st.error("Identifiants incorrects ou mail non confirmé.")
+
 def logout():
     supabase.auth.sign_out()
     st.session_state.user = None
     st.session_state.profile = None
     cookie_manager.delete("sb_refresh_token")
     st.rerun()
-
-def get_siret_info(siret):
-    try:
-        url = f"https://recherche-entreprises.api.gouv.fr/search?q={siret.replace(' ', '')}"
-        res = requests.get(url)
-        if res.status_code == 200:
-            ent = res.json()['results'][0]
-            siege = ent.get('siege', {})
-            return {"NOM": ent.get('nom_complet'), "ADRESSE": siege.get('adresse'), "VILLE": siege.get('libelle_commune'), "CP": siege.get('code_postal'), "TVA": ent.get('numero_tva_intracommunautaire')}
-    except: return None
 
 def upload_file(file, path):
     try:
@@ -115,23 +125,15 @@ if not st.session_state.user:
     st.markdown("<h1 style='text-align: center;'>🔐 Connexion CRM</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        with st.form("login"):
+        with st.form("login_form"):
             em = st.text_input("Email")
             pw = st.text_input("Mot de passe", type="password")
             if st.form_submit_button("Se connecter", use_container_width=True):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": em, "password": pw})
-                    p_data = supabase.table("profiles").select("*").eq("id", res.user.id).execute().data
-                    if p_data:
-                        st.session_state.user = res.user
-                        st.session_state.profile = p_data[0]
-                        cookie_manager.set("sb_refresh_token", res.session.refresh_token)
-                        st.rerun()
-                except: st.error("Identifiants incorrects.")
+                login(em, pw)
     st.stop()
 
 # ==========================================
-# 🚀 APPLICATION PRINCIPALE
+# 🚀 APPLICATION
 # ==========================================
 MY_PROFILE = st.session_state.profile
 MY_ROLE = MY_PROFILE.get('role', 'user')
@@ -142,13 +144,32 @@ with st.sidebar:
     st.info(f"Rôle : {MY_ROLE.upper()}")
     if st.button("Se déconnecter", type="primary", use_container_width=True): logout()
 
-# --- LOGIQUE ONGLETS ---
+# --- SUPER ADMIN ---
+if MY_ROLE == "super_admin":
+    sa_tabs = st.tabs(["🏢 Entreprises", "👀 Voir CRM"])
+    with sa_tabs[0]:
+        with st.form("new_comp"):
+            cn = st.text_input("Nom Entreprise")
+            ae = st.text_input("Email Gérant (Admin 1)")
+            ap = st.text_input("Pass", type="password")
+            if st.form_submit_button("Créer Entreprise"):
+                r_c = supabase.table("companies").insert({"name": cn}).execute()
+                r_a = supabase.auth.sign_up({"email": ae, "password": ap})
+                supabase.table("profiles").insert({"id": r_a.user.id, "email": ae, "company_id": r_c.data[0]['id'], "role": "admin1", "full_name": f"Gérant {cn}"}).execute()
+                st.success("✅ Créé !")
+                st.rerun()
+    with sa_tabs[1]:
+        all_c = supabase.table("companies").select("*").execute().data
+        target = st.selectbox("Accéder à :", [c['name'] for c in all_c])
+        if target: MY_COMPANY_ID = next(c['id'] for c in all_c if c['name'] == target)
+
+# --- ONGLETS ---
 tabs_list = ["1. 📝 Nouveau Dossier", "2. 📂 Gestion des Dossiers"]
 if MY_ROLE in ["admin1", "super_admin"]: tabs_list.append("3. ⚙️ Configuration")
 if MY_ROLE in ["admin1", "admin2", "super_admin"]: tabs_list.append("4. 👥 Utilisateurs")
 tabs = st.tabs(tabs_list)
 
-# ONGLET 1 : CRÉATION (RESTAURÉ AVEC TYPES ADRESSE)
+# ONGLET 1 : NOUVEAU DOSSIER (TYPES ADRESSE + TEXTE LONG)
 with tabs[0]:
     st.header("Créer un dossier")
     acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
@@ -158,56 +179,31 @@ with tabs[0]:
         act_id = next(a['id'] for a in acts if a['name'] == act_sel)
         cols = supabase.table("collections").select("*").eq("activity_id", act_id).execute().data
         if cols:
-            sel_col_name = st.selectbox("Modèle", [c['name'] for c in cols])
-            mod = next(c for c in cols if c['name'] == sel_col_name)
-            fields = mod['fields']
+            mod = next(c for c in cols if c['name'] == st.selectbox("Modèle", [c['name'] for c in cols]))
             f_id = st.session_state.form_reset_id
-            
-            # --- AUTO FILL SIRET ---
-            if any(f['type'] == "SIRET" for f in fields):
-                with st.expander("⚡ Remplissage SIRET"):
-                    s_in = st.text_input("SIRET", key=f"s_in_{f_id}")
-                    if st.button("Remplir"):
-                        info = get_siret_info(s_in)
-                        if info:
-                            for i, f in enumerate(fields):
-                                k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
-                                if f['type'] == 'SIRET': st.session_state[k] = s_in
-                                elif "nom" in f['name'].lower() or "raison" in f['name'].lower(): st.session_state[k] = info['NOM']
-                                elif "adresse" in f['name'].lower() and "travaux" not in f['name'].lower(): st.session_state[k] = info['ADRESSE']
-            
             st.divider()
             data, f_map, main_addr = {}, {}, ""
-            for i, f in enumerate(fields):
+            for i, f in enumerate(mod['fields']):
                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
                 if f['type'] == "Section/Titre": st.markdown(f"**{f['name']}**")
                 elif f['type'] == "Fichier/Image": f_map[f['name']] = st.file_uploader(f['name'], accept_multiple_files=True, key=k)
                 elif f['type'] == "Texte Long": data[f['name']] = st.text_area(f['name'], key=k)
                 elif f['type'] == "Adresse Travaux":
-                    copy_btn = st.checkbox(f"Copier adresse siège : {main_addr}", key=f"chk_{k}") if main_addr else False
-                    val = main_addr if copy_btn else st.session_state.get(k, "")
-                    data[f['name']] = st.text_input(f['name'], value=val, key=k)
-                else: 
-                    val = st.text_input(f['name'], key=k)
-                    data[f['name']] = val
-                    if f['type'] == "Adresse": main_addr = val
+                    copy = st.checkbox(f"Copier adresse : {main_addr}", key=f"chk_{k}") if main_addr else False
+                    data[f['name']] = st.text_input(f['name'], value=main_addr if copy else "", key=k)
+                else:
+                    data[f['name']] = st.text_input(f['name'], key=k)
+                    if f['type'] == "Adresse": main_addr = data[f['name']]
 
-            if st.button("💾 ENREGISTRER LE DOSSIER", type="primary", use_container_width=True):
+            if st.button("💾 ENREGISTRER", type="primary", use_container_width=True):
                 for fn, fl in f_map.items():
-                    urls = []
-                    if fl:
-                        for fi in fl:
-                            path = f"{MY_COMPANY_ID}/{mod['id']}/{int(time.time())}_{fi.name}"
-                            u = upload_file(fi, path)
-                            if u: urls.append(u)
-                    data[fn] = urls
+                    urls = [upload_file(fi, f"{MY_COMPANY_ID}/{mod['id']}/{int(time.time())}_{fi.name}") for fi in fl]
+                    data[fn] = [u for u in urls if u]
                 supabase.table("records").insert({"collection_id": mod['id'], "data": data, "created_by": st.session_state.user.id}).execute()
-                st.success("✅ Dossier créé !")
                 st.session_state.form_reset_id += 1
-                time.sleep(1)
                 st.rerun()
 
-# ONGLET 2 : GESTION (RESTAURÉ)
+# ONGLET 2 : GESTION (DESIGN COMPLET RESTAURÉ)
 with tabs[1]:
     st.header("Gestion des Dossiers")
     m_acts = supabase.table("activities").select("id").eq("company_id", MY_COMPANY_ID).execute().data
@@ -216,156 +212,122 @@ with tabs[1]:
         if a_cols:
             recs = supabase.table("records").select("*, collections(name, fields)").in_("collection_id", [c['id'] for c in a_cols]).order('created_at', desc=True).execute().data
             if recs:
-                s_map = {f"👤 {r['data'].get('nom', 'Client')} | 📄 {r['collections']['name']} | 📅 {r['created_at'][:10]}": r for r in recs}
-                sel = st.selectbox("Choisir dossier", list(s_map.keys()))
-                if sel:
-                    r = s_map[sel]
-                    curr_d = r['data']
-                    with st.form(f"ed_{r['id']}"):
-                        new_d = curr_d.copy()
-                        for f in r['collections']['fields']:
+                s_map = {f"👤 {r['data'].get('nom', 'Client')} | 📄 {r['collections']['name']}": r for r in recs}
+                sel_r = s_map.get(st.selectbox("Choisir dossier", list(s_map.keys())))
+                if sel_r:
+                    # Modification data
+                    with st.form(f"ed_{sel_r['id']}"):
+                        new_d = sel_r['data'].copy()
+                        for f in sel_r['collections']['fields']:
                             if f['type'] in ["Fichier/Image", "Section/Titre"]: continue
-                            elif f['type'] == "Texte Long": new_d[f['name']] = st.text_area(f['name'], value=curr_d.get(f['name'], ""))
-                            else: new_d[f['name']] = st.text_input(f['name'], value=curr_d.get(f['name'], ""))
-                        if st.form_submit_button("💾 Sauvegarder les modifications"):
-                            supabase.table("records").update({"data": new_d}).eq("id", r['id']).execute()
+                            elif f['type'] == "Texte Long": new_d[f['name']] = st.text_area(f['name'], value=sel_r['data'].get(f['name'], ""))
+                            else: new_d[f['name']] = st.text_input(f['name'], value=sel_r['data'].get(f['name'], ""))
+                        if st.form_submit_button("Sauvegarder"):
+                            supabase.table("records").update({"data": new_d}).eq("id", sel_r['id']).execute()
                             st.rerun()
-
+                    
+                    # Gestion fichiers
                     st.divider()
                     all_urls = []
-                    for f in [x for x in r['collections']['fields'] if x['type'] == "Fichier/Image"]:
-                        fname = f['name']
-                        urls = curr_d.get(fname, [])
+                    for f in [x for x in sel_r['collections']['fields'] if x['type'] == "Fichier/Image"]:
+                        urls = sel_r['data'].get(f['name'], [])
                         all_urls.extend(urls)
-                        with st.expander(f"📁 {fname} ({len(urls)})"):
+                        with st.expander(f"📁 {f['name']} ({len(urls)})"):
                             for i, u in enumerate(urls):
                                 c1, c2 = st.columns([4, 1])
-                                c1.markdown(f"📄 [Fichier {i+1}]({u})")
-                                if c2.button("❌", key=f"rm_{r['id']}_{fname}_{i}"):
+                                c1.markdown(f"📄 [Lien {i+1}]({u})")
+                                if c2.button("❌", key=f"del_{sel_r['id']}_{f['name']}_{i}"):
                                     urls.remove(u)
-                                    curr_d[fname] = urls
-                                    supabase.table("records").update({"data": curr_d}).eq("id", r['id']).execute()
+                                    sel_r['data'][f['name']] = urls
+                                    supabase.table("records").update({"data": sel_r['data']}).eq("id", sel_r['id']).execute()
                                     st.rerun()
-                            up = st.file_uploader("Ajout", accept_multiple_files=True, key=f"up_{r['id']}_{fname}")
-                            if up and st.button("Envoyer", key=f"btn_{r['id']}_{fname}"):
-                                for nf in up:
-                                    path = f"{MY_COMPANY_ID}/{r['collection_id']}/{int(time.time())}_{nf.name}"
-                                    pub = upload_file(nf, path)
-                                    if pub: urls.append(pub)
-                                curr_d[fname] = urls
-                                supabase.table("records").update({"data": curr_d}).eq("id", r['id']).execute()
+                            up = st.file_uploader("Ajout", key=f"up_{sel_r['id']}_{f['name']}")
+                            if up and st.button("Envoyer", key=f"bt_{sel_r['id']}_{f['name']}"):
+                                pub = upload_file(up, f"{MY_COMPANY_ID}/{sel_r['collection_id']}/{int(time.time())}_{up.name}")
+                                if pub: urls.append(pub)
+                                sel_r['data'][f['name']] = urls
+                                supabase.table("records").update({"data": sel_r['data']}).eq("id", sel_r['id']).execute()
                                 st.rerun()
                     
-                    if all_urls and st.button("📄 GÉNÉRER PDF FUSIONNÉ"):
-                        pdf = merge_files_to_pdf(all_urls)
-                        st.download_button("📥 Télécharger", pdf, f"Dossier_{r['id']}.pdf", "application/pdf")
-                    
+                    if all_urls and st.button("📄 PDF FUSIONNÉ"):
+                        st.download_button("📥 Télécharger", merge_files_to_pdf(all_urls), f"Dossier_{sel_r['id']}.pdf", "application/pdf")
                     if st.button("💀 Supprimer Dossier", type="primary"):
-                        supabase.table("records").delete().eq("id", r['id']).execute()
+                        supabase.table("records").delete().eq("id", sel_r['id']).execute()
                         st.rerun()
 
-# ONGLET 3 : CONFIGURATION (TYPES RESTAURÉS)
+# ONGLET 3 : CONFIGURATION (TYPES + TRI + ÉDITION)
 if "3. ⚙️ Configuration" in tabs_list:
-    idx = tabs_list.index("3. ⚙️ Configuration")
-    with tabs[idx]:
+    with tabs[tabs_list.index("3. ⚙️ Configuration")]:
         st.header("⚙️ Configuration (Droits Gérant)")
-        
-        # 1. ACTIVITÉS
-        with st.form("add_act"):
+        with st.form("a"):
             na = st.text_input("Nouvelle activité")
             if st.form_submit_button("Ajouter"):
                 supabase.table("activities").insert({"name": na, "company_id": MY_COMPANY_ID}).execute()
                 st.rerun()
         
-        # 2. MODÈLES
         st.divider()
         acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
         if acts:
-            s_act = st.selectbox("Activité :", [a['name'] for a in acts])
-            s_id = next(a['id'] for a in acts if a['name'] == s_act)
-            
-            # --- LISTE DES TYPES COMPLÈTE ---
+            s_id = next(a['id'] for a in acts if a['name'] == st.selectbox("Sélectionner activité :", [a['name'] for a in acts]))
             type_list = ["Texte Court", "Texte Long", "SIRET", "Adresse", "Adresse Travaux", "Fichier/Image", "Section/Titre"]
-
+            
             with st.expander("➕ Nouveau Modèle"):
-                nm = st.text_input("Nom du modèle")
+                nm = st.text_input("Nom modèle")
                 if "tmp" not in st.session_state: st.session_state.tmp = []
                 c1, c2, c3 = st.columns([3, 2, 1])
-                fn, ft = c1.text_input("Nom champ"), c2.selectbox("Type", type_list, key="new_type")
+                fn = c1.text_input("Nom champ")
+                ft = c2.selectbox("Type", type_list, key="nt")
                 if c3.button("Ajouter"):
                     st.session_state.tmp.append({"name": fn, "type": ft})
                     st.rerun()
-                if st.session_state.tmp:
-                    st.write(st.session_state.tmp)
-                    if st.button("💾 Sauvegarder"):
-                        supabase.table("collections").insert({"name": nm, "activity_id": s_id, "fields": st.session_state.tmp}).execute()
-                        st.session_state.tmp = []
-                        st.rerun()
-            
-            st.write("---")
-            mods = supabase.table("collections").select("*").eq("activity_id", s_id).execute().data
-            for m in mods:
+                if st.session_state.tmp and st.button("💾 Sauvegarder"):
+                    supabase.table("collections").insert({"name": nm, "activity_id": s_id, "fields": st.session_state.tmp}).execute()
+                    st.session_state.tmp = []
+                    st.rerun()
+
+            for m in supabase.table("collections").select("*").eq("activity_id", s_id).execute().data:
                 with st.expander(f"📝 Gérer {m['name']}"):
-                    # AJOUT CHIRURGICAL
                     st.markdown("#### ➕ Ajouter un champ")
                     ca1, ca2, ca3 = st.columns([3, 2, 1])
-                    new_fn = ca1.text_input("Nom", key=f"nfn_{m['id']}")
-                    new_ft = ca2.selectbox("Type", type_list, key=f"nft_{m['id']}")
-                    if ca3.button("Ajouter", key=f"abtn_{m['id']}"):
-                        u_f = m['fields'] + [{"name": new_fn, "type": new_ft}]
-                        supabase.table("collections").update({"fields": u_f}).eq("id", m['id']).execute()
+                    if ca3.button("Ajouter", key=f"ab_{m['id']}"):
+                        supabase.table("collections").update({"fields": m['fields'] + [{"name": ca1.text_input("Nom", key=f"n_{m['id']}"), "type": ca2.selectbox("Type", type_list, key=f"t_{m['id']}")}]}).eq("id", m['id']).execute()
                         st.rerun()
                     
                     st.write("---")
-                    # TRI ET SUPPRESSION INDIVIDUELLE
                     st.markdown("#### 🔃 Ordre & 🗑️ Suppression")
-                    cur_f = m['fields']
-                    f_labels = [f"{f['name']} [{f['type']}]" for f in cur_f]
-                    sorted_labels = sort_items(f_labels, direction='vertical', key=f"sort_{m['id']}")
+                    f_labels = [f"{f['name']} [{f['type']}]" for f in m['fields']]
+                    sorted_labels = sort_items(f_labels, direction='vertical', key=f"so_{m['id']}")
+                    if st.button("💾 Valider l'ordre", key=f"sv_{m['id']}"):
+                        new_l = [next(f for f in m['fields'] if f"{f['name']} [{f['type']}]" == l) for l in sorted_labels]
+                        supabase.table("collections").update({"fields": new_l}).eq("id", m['id']).execute()
+                        st.rerun()
                     
-                    if st.button("💾 Valider l'ordre", key=f"save_{m['id']}"):
-                        new_list = [next(f for f in cur_f if f"{f['name']} [{f['type']}]" == l) for l in sorted_labels]
-                        supabase.table("collections").update({"fields": new_list}).eq("id", m['id']).execute()
-                        st.rerun()
-
-                    to_rm = st.multiselect("Champs à supprimer :", [f['name'] for f in cur_f], key=f"msel_{m['id']}")
-                    if to_rm and st.button(f"Supprimer les champs sélectionnés", key=f"conf_f_{m['id']}"):
-                        rem_list = [f for f in cur_f if f['name'] not in to_rm]
-                        supabase.table("collections").update({"fields": rem_list}).eq("id", m['id']).execute()
-                        st.rerun()
-
-                    if st.button("💀 Supprimer Modèle Entier", key=f"kil_{m['id']}", type="primary"):
-                        supabase.table("collections").delete().eq("id", m['id']).execute()
+                    to_rm = st.multiselect("Champs à supprimer :", [f['name'] for f in m['fields']], key=f"ms_{m['id']}")
+                    if to_rm and st.button(f"Confirmer suppression champs", key=f"cf_{m['id']}"):
+                        supabase.table("collections").update({"fields": [f for f in m['fields'] if f['name'] not in to_rm]}).eq("id", m['id']).execute()
                         st.rerun()
 
 # ONGLET 4 : UTILISATEURS (FIX SUPPRESSION)
 if "4. 👥 Utilisateurs" in tabs_list:
-    idx = tabs_list.index("4. 👥 Utilisateurs")
-    with tabs[idx]:
-        st.header("👥 Gestion de l'équipe")
-        with st.form("add_user"):
+    with tabs[tabs_list.index("4. 👥 Utilisateurs")]:
+        st.header("👥 Équipe")
+        with st.form("u"):
             ue, up = st.text_input("Email"), st.text_input("Pass", type="password")
             ur = st.selectbox("Rôle", ["admin2", "user"] if MY_ROLE == "admin1" else ["user"])
-            if st.form_submit_button("Ajouter le collaborateur"):
-                try:
-                    res = supabase.auth.sign_up({"email": ue, "password": up})
-                    if res.user:
-                        supabase.table("profiles").insert({"id": res.user.id, "email": ue, "company_id": MY_COMPANY_ID, "role": ur, "full_name": ue.split('@')[0]}).execute()
-                        st.rerun()
-                except Exception as e: st.error(f"Erreur : {e}")
+            if st.form_submit_button("Ajouter"):
+                res = supabase.auth.sign_up({"email": ue, "password": up})
+                supabase.table("profiles").insert({"id": res.user.id, "email": ue, "company_id": MY_COMPANY_ID, "role": ur, "full_name": ue.split('@')[0]}).execute()
+                st.rerun()
         
         st.divider()
-        st.subheader("Membres actuels")
         u_list = supabase.table("profiles").select("*").eq("company_id", MY_COMPANY_ID).execute().data
         if u_list:
             st.dataframe(pd.DataFrame(u_list)[["email", "role", "full_name"]], use_container_width=True)
-            for user in u_list:
-                if user['id'] == st.session_state.user.id: continue
-                
-                can_del = (MY_ROLE == "admin1") or (MY_ROLE == "admin2" and user['role'] == "user")
-                if can_del:
-                    if st.button(f"🗑️ Confirmer suppression de : {user['email']}", key=f"d_{user['id']}", type="secondary"):
-                        supabase.table("profiles").delete().eq("id", user['id']).execute()
-                        st.success("Supprimé !")
-                        time.sleep(0.5)
-                        st.rerun() # INDISPENSABLE POUR ACTUALISER LE TABLEAU
+            for u in u_list:
+                if u['id'] != st.session_state.user.id:
+                    if (MY_ROLE == "admin1") or (MY_ROLE == "admin2" and u['role'] == "user"):
+                        if st.button(f"🗑️ Supprimer : {u['email']}", key=f"d_{u['id']}", type="secondary"):
+                            supabase.table("profiles").delete().eq("id", u['id']).execute()
+                            st.success("Supprimé !")
+                            time.sleep(0.5)
+                            st.rerun() # INDISPENSABLE POUR ACTUALISER
