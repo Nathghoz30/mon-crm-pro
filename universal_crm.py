@@ -427,9 +427,14 @@ if len(tabs) > 3:
                     supabase.auth.resend({"type": "signup", "email": u['email']})
                     st.toast("E-mail renvoyé")
                 if ac[1].button("🔑", key=f"rp_{u['id']}", help="Reset password"):
-                    supabase.auth.reset_password_for_email(u['email'])
+                    # On indique explicitement à Supabase d'utiliser l'URL avec le mode recovery
+                    supabase.auth.reset_password_for_email(
+                        u['email'], 
+                        options={"redirect_to": "https://mon-crm-pro-yjmmyrrkxcrv8xlgu5dbx.streamlit.app/?type=recovery"}
+                    )
                     st.toast("Lien de reset envoyé")
                 if u['id'] != st.session_state.user.id:
                     if ac[2].button("🗑️", key=f"du_{u['id']}", help="Supprimer"):
                         supabase.table("profiles").delete().eq("id", u['id']).execute()
                         st.rerun()
+
