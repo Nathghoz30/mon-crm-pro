@@ -54,6 +54,10 @@ if 'form_reset_id' not in st.session_state:
 if 'upload_reset_id' not in st.session_state:
     st.session_state.upload_reset_id = 0
 
+# --- DÉTECTION MODE RÉCUPÉRATION (V27) ---
+# On vérifie si l'URL contient "type=recovery"
+is_recovery_mode = st.query_params.get("type") == "recovery"
+
 # --- RECONNEXION AUTO ---
 if not st.session_state.user:
     time.sleep(0.1)
@@ -146,6 +150,36 @@ def merge_files_to_pdf(file_urls):
     output = io.BytesIO()
     merger.write(output)
     return output.getvalue()
+
+# ==========================================
+# 🔑 ÉCRAN DE RÉINITIALISATION (V27)
+# ==========================================
+if is_recovery_mode:
+    st.markdown("<h1 style='text-align: center;'>🔑 Nouveau mot de passe</h1>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.info("Saisissez votre nouveau mot de passe ci-dessous.")
+        with st.form("reset_password_form"):
+            new_password = st.text_input("Nouveau mot de passe", type="password")
+            confirm_password = st.text_input("Confirmer le mot de passe", type="password")
+            
+            if st.form_submit_button("Mettre à jour mon mot de passe", use_container_width=True):
+                if len(new_password) < 6:
+                    st.error("Le mot de passe doit contenir au moins 6 caractères.")
+                elif new_password != confirm_password:
+                    st.error("Les mots de passe ne correspondent pas.")
+                else:
+                    try:
+                        # Mise à jour effective du mot de passe dans Supabase
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("✅ Mot de passe mis à jour ! Vous allez être redirigé vers la connexion.")
+                        time.sleep(2)
+                        # On nettoie l'URL et on déconnecte pour forcer le nouveau login
+                        st.query_params.clear()
+                        logout()
+                    except Exception as e:
+                        st.error(f"Erreur lors de la mise à jour : {e}")
+    st.stop()
 
 # ==========================================
 # 🔐 ECRAN DE CONNEXION
@@ -352,13 +386,11 @@ if len(tabs) > 2:
                     supabase.table("collections").insert({"name": m_n, "activity_id": a_id, "fields": []}).execute()
                     st.rerun()
             
-            # Modification de l'ordre via tri (Streamlit Sortables)
             ms = supabase.table("collections").select("*").eq("activity_id", a_id).execute().data
             for m in ms:
                 with st.expander(f"📝 {m['name']}"):
                     t_k = f"tk_{m['id']}"
                     if t_k not in st.session_state: st.session_state[t_k] = 0
-                    # Ajouter/Supprimer champs...
                     labels = [f"{f['name']} [{f['type']}]" for f in m['fields']]
                     sorted_l = sort_items(labels, key=f"s_{m['id']}_{st.session_state[t_k]}")
                     if st.button("💾 Sauver Ordre", key=f"sv_{m['id']}"):
