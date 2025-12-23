@@ -46,27 +46,25 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
 
-# --- FONCTION LOGIN OPTIMISÉE ---
+# --- FONCTION LOGIN (Version V46 restaurée) ---
 def login(email, password):
-    msg_holder = st.empty() # Placeholder pour nettoyer les messages
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
-            msg_holder.info("⌛ Chargement du profil...")
-            # Boucle de sécurité pour être sûr d'avoir le profil
+            # Sécurité anti-double clic (boucle d'attente)
             for _ in range(3):
                 p_res = supabase.table("profiles").select("*").eq("id", res.user.id).execute()
                 if p_res.data:
                     st.session_state.user = res.user
                     st.session_state.profile = p_res.data[0]
-                    msg_holder.success("✅ Connexion réussie !")
+                    st.success("✅ Connexion réussie !")
                     time.sleep(0.5)
                     st.rerun()
                     return
                 time.sleep(0.5)
-            msg_holder.error("Erreur : Profil introuvable.")
+            st.error("Erreur : Profil introuvable.")
     except:
-        msg_holder.error("❌ Identifiants incorrects.")
+        st.error("Identifiants incorrects.")
 
 def logout():
     supabase.auth.sign_out()
@@ -216,7 +214,7 @@ with tabs[1]:
                         with st.expander(f"📁 {fname} ({len(urls)})"):
                             for i, u in enumerate(urls):
                                 c1, c2 = st.columns([4, 1])
-                                c1.markdown(f"📄 [Lien {i+1}]({u})")
+                                c1.markdown(f"📄 [Lien fichier {i+1}]({u})")
                                 if c2.button("❌", key=f"d_{r['id']}_{fname}_{i}"):
                                     urls.remove(u)
                                     r['data'][fname] = urls
@@ -239,7 +237,7 @@ with tabs[1]:
                         st.rerun()
             else: st.info("Aucun dossier.")
 
-# ONGLET 3 : CONFIGURATION (CORRIGÉ V47)
+# ONGLET 3 : CONFIGURATION (CORRIGÉ & VALIDE)
 if "3. ⚙️ Configuration" in tabs_list:
     idx = tabs_list.index("3. ⚙️ Configuration")
     with tabs[idx]:
@@ -261,7 +259,7 @@ if "3. ⚙️ Configuration" in tabs_list:
                 st.write("Définissez les champs ci-dessous puis sauvegardez.")
                 nm = st.text_input("Nom du modèle")
                 
-                # Zone d'ajout de champs (Hors formulaire pour éviter les bugs)
+                # Zone de définition (HORS DU BOUTON)
                 c1, c2, c3 = st.columns([3, 2, 1])
                 fn = c1.text_input("Nom champ", key="new_fn")
                 ft = c2.selectbox("Type", type_list, key="new_ft")
@@ -280,17 +278,16 @@ if "3. ⚙️ Configuration" in tabs_list:
                         time.sleep(1)
                         st.rerun()
 
-            # --- GESTION DES MODÈLES EXISTANTS (CORRECTIF CLÉ) ---
+            # --- GESTION DES MODÈLES EXISTANTS ---
             for m in supabase.table("collections").select("*").eq("activity_id", aid).execute().data:
                 with st.expander(f"📝 Gérer {m['name']}"):
                     st.markdown("#### Ajouter un champ")
                     
-                    # 1. On définit les widgets D'ABORD (Correctif V47)
+                    # CORRECTION ICI : INPUTS DÉFINIS AVANT LE CLIC
                     ca1, ca2, ca3 = st.columns([3, 2, 1])
                     new_field_name = ca1.text_input("Nom", key=f"n_{m['id']}")
                     new_field_type = ca2.selectbox("Type", type_list, key=f"t_{m['id']}")
                     
-                    # 2. Le bouton utilise leurs valeurs
                     if ca3.button("Ajouter", key=f"add_{m['id']}"):
                         if new_field_name:
                             nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
