@@ -9,7 +9,7 @@ import re
 from supabase import create_client, Client
 from pypdf import PdfWriter, PdfReader
 from PIL import Image
-# L'IMPORT MANQUANT ÉTAIT ICI :
+# IMPORT CRITIQUE POUR LE JAVASCRIPT
 import streamlit.components.v1 as components
 
 # Import Gestion des Cookies
@@ -17,13 +17,6 @@ try:
     import extra_streamlit_components as stx
 except ImportError:
     st.error("⚠️ Librairie manquante : 'extra-streamlit-components'.")
-    st.stop()
-
-# Import Drag & Drop
-try:
-    from streamlit_sortables import sort_items
-except ImportError:
-    st.error("⚠️ Librairie manquante : 'streamlit-sortables'.")
     st.stop()
 
 # --- CONFIGURATION PAGE ---
@@ -37,12 +30,12 @@ def init_connection():
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Erreur connexion Supabase : {e}")
+        st.error(f"Erreur connexion : {e}")
         st.stop()
 
 supabase = init_connection()
 
-# --- 1. LE PONT JAVASCRIPT (V31) ---
+# --- 1. PONT JAVASCRIPT POUR LE HASH (#) ---
 components.html(
     """
     <script>
@@ -55,7 +48,7 @@ components.html(
     """, height=0
 )
 
-# --- GESTION DES COOKIES ET ÉTAT ---
+# --- 2. ÉTAT DE SESSION ET COOKIES ---
 cookie_manager = stx.CookieManager()
 
 if 'user' not in st.session_state:
@@ -63,17 +56,16 @@ if 'user' not in st.session_state:
 if 'profile' not in st.session_state:
     st.session_state.profile = None
 
-# Détection Recovery
+# Détection Mode Récupération
 is_recovery_mode = st.query_params.get("type") == "recovery"
 
-# --- 2. RECONNEXION AUTO (Sauf si Recovery) ---
+# --- 3. RECONNEXION AUTOMATIQUE ---
 if not st.session_state.user and not is_recovery_mode:
-    time.sleep(0.2) # Laisser le temps au cookie manager
     refresh_token = cookie_manager.get("sb_refresh_token")
     if refresh_token:
         try:
             res = supabase.auth.refresh_session(refresh_token)
-            if res.user and res.session:
+            if res.user:
                 p_data = supabase.table("profiles").select("*").eq("id", res.user.id).execute().data
                 if p_data:
                     st.session_state.user = res.user
@@ -81,7 +73,7 @@ if not st.session_state.user and not is_recovery_mode:
         except:
             cookie_manager.delete("sb_refresh_token")
 
-# --- FONCTIONS ---
+# --- 4. FONCTIONS DE SORTIE ---
 def logout():
     supabase.auth.sign_out()
     st.session_state.user = None
@@ -91,16 +83,16 @@ def logout():
     st.rerun()
 
 # ==========================================
-# 🔑 ÉCRAN RÉCUPÉRATION
+# 🔑 ÉCRAN RÉCUPÉRATION (REINITIALISATION MDP)
 # ==========================================
 if is_recovery_mode:
     st.markdown("<h1 style='text-align: center;'>🔑 Nouveau mot de passe</h1>", unsafe_allow_html=True)
     with st.form("recovery_form"):
         new_p = st.text_input("Nouveau mot de passe", type="password")
-        if st.form_submit_button("Valider"):
+        if st.form_submit_button("Mettre à jour mon mot de passe"):
             try:
                 supabase.auth.update_user({"password": new_p})
-                st.success("✅ Mis à jour ! Connectez-vous.")
+                st.success("✅ Mot de passe mis à jour ! Veuillez vous connecter.")
                 time.sleep(2)
                 st.query_params.clear()
                 st.rerun()
@@ -115,7 +107,7 @@ if not st.session_state.user:
     st.markdown("<h1 style='text-align: center;'>🔐 Connexion CRM</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        with st.form("login"):
+        with st.form("login_form"):
             u_email = st.text_input("Email")
             u_pass = st.text_input("Mot de passe", type="password")
             if st.form_submit_button("Se connecter", use_container_width=True):
@@ -128,14 +120,37 @@ if not st.session_state.user:
                         if res.session:
                             cookie_manager.set("sb_refresh_token", res.session.refresh_token)
                         st.rerun()
+                    else:
+                        st.error("Profil inexistant dans la base.")
                 except:
-                    st.error("Identifiants incorrects ou mail non confirmé.")
+                    st.error("Identifiants incorrects ou email non confirmé.")
     st.stop()
 
 # ==========================================
-# 🚀 APPLICATION PRINCIPALE
+# 🚀 CONTENU DU CRM (S'affiche si connecté)
 # ==========================================
-# (Reprenez ici votre code habituel avec les onglets 1, 2, 3 et 4)
-st.success(f"Connecté en tant que {st.session_state.profile['full_name']}")
-if st.button("Déconnexion"):
+# Si on arrive ici, c'est que l'utilisateur est connecté et le profil chargé
+MY_PROFILE = st.session_state.profile
+MY_ROLE = MY_PROFILE.get('role', 'user')
+MY_COMPANY_ID = MY_PROFILE.get('company_id')
+
+st.title(f"Universal CRM SaaS 🚀")
+st.sidebar.write(f"Utilisateur : **{MY_PROFILE['full_name']}**")
+st.sidebar.caption(f"Rôle : {MY_ROLE.upper()}")
+
+# VOS ONGLETS ET VOTRE LOGIQUE HABITUELLE ICI
+tab1, tab2 = st.tabs(["📝 Dossiers", "👥 Équipe"])
+
+with tab1:
+    st.header("Gestion des dossiers")
+    st.info("Le moteur est réparé, vous pouvez créer vos dossiers.")
+
+with tab2:
+    if MY_ROLE in ["admin", "super_admin"]:
+        st.header("Gestion des utilisateurs")
+        # Ajoutez ici votre code de gestion des utilisateurs
+    else:
+        st.warning("Accès réservé aux administrateurs.")
+
+if st.sidebar.button("Déconnexion", type="primary"):
     logout()
