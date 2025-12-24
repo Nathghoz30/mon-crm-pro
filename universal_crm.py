@@ -45,10 +45,9 @@ cookie_manager = stx.CookieManager()
 if 'user' not in st.session_state: st.session_state.user = None
 if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
-# CORRECTIF V54 : Compteur pour forcer le rafraîchissement du Drag & Drop
 if 'config_updater' not in st.session_state: st.session_state.config_updater = 0
 
-# --- FONCTION LOGIN (Version V53 : Blindée) ---
+# --- FONCTION LOGIN BLINDÉE (V53) ---
 def login(email, password):
     msg_box = st.empty()
     login_success = False
@@ -56,7 +55,6 @@ def login(email, password):
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
-            # Sécurité anti-double clic
             for _ in range(3):
                 p_res = supabase.table("profiles").select("*").eq("id", res.user.id).execute()
                 if p_res.data:
@@ -159,7 +157,7 @@ if MY_ROLE in ["admin1", "super_admin"]: tabs_list.append("3. ⚙️ Configurati
 if MY_ROLE in ["admin1", "admin2", "super_admin"]: tabs_list.append("4. 👥 Utilisateurs")
 tabs = st.tabs(tabs_list)
 
-# ONGLET 1 : CRÉATION
+# ONGLET 1 : CRÉATION (CORRIGÉ V55)
 with tabs[0]:
     st.header("Créer un dossier")
     acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
@@ -168,7 +166,16 @@ with tabs[0]:
         act_id = next(a['id'] for a in acts if a['name'] == act_sel)
         cols = supabase.table("collections").select("*").eq("activity_id", act_id).execute().data
         if cols:
-            mod = next(c for c in cols if c['name'] == st.selectbox("Modèle", [c['name'] for c in cols]))
+            # --- CORRECTIF CRASH DOUBLE ID ---
+            # 1. On prépare les options AVANT d'afficher le menu
+            # On ajoute l'ID pour gérer les doublons de nom (ex: "Test (1)", "Test (2)")
+            opts = [f"{c['name']} (ID: {c['id']})" for c in cols]
+            choice = st.selectbox("Modèle", opts, key="sel_model_creation")
+            
+            # 2. On retrouve le modèle correspondant
+            sel_id = int(choice.split("(ID: ")[1][:-1])
+            mod = next(c for c in cols if c['id'] == sel_id)
+            
             f_id = st.session_state.form_reset_id
             st.divider()
             data, f_map, main_addr = {}, {}, ""
@@ -255,7 +262,7 @@ with tabs[1]:
                         st.rerun()
             else: st.info("Aucun dossier.")
 
-# ONGLET 3 : CONFIGURATION (CORRECTIF V54 : CLÉ DYNAMIQUE POUR LE TRI)
+# ONGLET 3 : CONFIGURATION (CORRIGÉ V54 + V55)
 if "3. ⚙️ Configuration" in tabs_list:
     idx = tabs_list.index("3. ⚙️ Configuration")
     with tabs[idx]:
@@ -293,7 +300,6 @@ if "3. ⚙️ Configuration" in tabs_list:
                         st.rerun()
 
             # GESTION EXISTANTE
-            # On récupère les modèles
             models_data = supabase.table("collections").select("*").eq("activity_id", aid).execute().data
             
             for m in models_data:
@@ -308,16 +314,13 @@ if "3. ⚙️ Configuration" in tabs_list:
                             nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
                             supabase.table("collections").update({"fields": nf}).eq("id", m['id']).execute()
                             st.success("Champ ajouté !")
-                            # ON CHANGE LA CLÉ DE RAFRAÎCHISSEMENT
-                            st.session_state.config_updater += 1 
+                            st.session_state.config_updater += 1
                             time.sleep(1.5)
                             st.rerun()
                     
                     st.divider()
                     st.markdown("#### Trier / Supprimer")
                     
-                    # CORRECTIF V54 : LA CLÉ DU COMPOSANT DÉPEND DU COMPTEUR
-                    # Cela force le Drag&Drop à se reconstruire avec la NOUVELLE liste
                     fl = [f"{f['name']} [{f['type']}]" for f in m['fields']]
                     dynamic_key = f"sort_{m['id']}_{st.session_state.config_updater}"
                     
