@@ -45,23 +45,24 @@ cookie_manager = stx.CookieManager()
 if 'user' not in st.session_state: st.session_state.user = None
 if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
+# CORRECTIF V54 : Compteur pour forcer le rafraîchissement du Drag & Drop
+if 'config_updater' not in st.session_state: st.session_state.config_updater = 0
 
-# --- FONCTION LOGIN BLINDÉE (V53) ---
+# --- FONCTION LOGIN (Version V53 : Blindée) ---
 def login(email, password):
     msg_box = st.empty()
-    login_success = False # On utilise un drapeau de succès
+    login_success = False
 
     try:
-        # 1. Tentative de connexion
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
-            # 2. Boucle de sécurité (Anti-double clic)
+            # Sécurité anti-double clic
             for _ in range(3):
                 p_res = supabase.table("profiles").select("*").eq("id", res.user.id).execute()
                 if p_res.data:
                     st.session_state.user = res.user
                     st.session_state.profile = p_res.data[0]
-                    login_success = True # Succès confirmé !
+                    login_success = True
                     break
                 time.sleep(0.5)
             
@@ -69,11 +70,8 @@ def login(email, password):
                 msg_box.error("Erreur : Profil introuvable (Délai dépassé).")
 
     except Exception as e:
-        # Ici, on ne tombe que si le mot de passe est faux ou erreur API
         msg_box.error("Identifiants incorrects.")
 
-    # 3. Le rechargement se fait ICI, en dehors du piège à erreurs
-    # C'est la garantie absolue que le Vert ne deviendra jamais Rouge.
     if login_success:
         msg_box.success("✅ Connexion réussie !")
         time.sleep(0.5)
@@ -257,7 +255,7 @@ with tabs[1]:
                         st.rerun()
             else: st.info("Aucun dossier.")
 
-# ONGLET 3 : CONFIGURATION (OPTIMISÉ V52 - Affichage Immédiat)
+# ONGLET 3 : CONFIGURATION (CORRECTIF V54 : CLÉ DYNAMIQUE POUR LE TRI)
 if "3. ⚙️ Configuration" in tabs_list:
     idx = tabs_list.index("3. ⚙️ Configuration")
     with tabs[idx]:
@@ -295,7 +293,7 @@ if "3. ⚙️ Configuration" in tabs_list:
                         st.rerun()
 
             # GESTION EXISTANTE
-            # On force le rechargement depuis la DB à chaque cycle pour être sûr
+            # On récupère les modèles
             models_data = supabase.table("collections").select("*").eq("activity_id", aid).execute().data
             
             for m in models_data:
@@ -307,27 +305,29 @@ if "3. ⚙️ Configuration" in tabs_list:
                     
                     if ca3.button("Ajouter", key=f"add_{m['id']}"):
                         if new_field_name:
-                            # 1. On met à jour la DB
                             nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
                             supabase.table("collections").update({"fields": nf}).eq("id", m['id']).execute()
-                            
-                            # 2. On affiche un succès immédiat
-                            st.success("Champ ajouté ! Actualisation...")
-                            
-                            # 3. On force un délai MINIME mais suffisant
-                            time.sleep(1)
+                            st.success("Champ ajouté !")
+                            # ON CHANGE LA CLÉ DE RAFRAÎCHISSEMENT
+                            st.session_state.config_updater += 1 
+                            time.sleep(1.5)
                             st.rerun()
                     
                     st.divider()
                     st.markdown("#### Trier / Supprimer")
-                    # On utilise directement les champs chargés
+                    
+                    # CORRECTIF V54 : LA CLÉ DU COMPOSANT DÉPEND DU COMPTEUR
+                    # Cela force le Drag&Drop à se reconstruire avec la NOUVELLE liste
                     fl = [f"{f['name']} [{f['type']}]" for f in m['fields']]
-                    sl = sort_items(fl, direction='vertical', key=f"s_{m['id']}")
+                    dynamic_key = f"sort_{m['id']}_{st.session_state.config_updater}"
+                    
+                    sl = sort_items(fl, direction='vertical', key=dynamic_key)
                     
                     if st.button("💾 Valider l'ordre", key=f"sv_{m['id']}"):
                          nl = [next(f for f in m['fields'] if f"{f['name']} [{f['type']}]" == l) for l in sl]
                          supabase.table("collections").update({"fields": nl}).eq("id", m['id']).execute()
                          st.success("Validé")
+                         st.session_state.config_updater += 1
                          time.sleep(0.5)
                          st.rerun()
                     
@@ -335,6 +335,7 @@ if "3. ⚙️ Configuration" in tabs_list:
                     if tr and st.button("Confirmer suppression", key=f"c_{m['id']}"):
                         supabase.table("collections").update({"fields": [f for f in m['fields'] if f['name'] not in tr]}).eq("id", m['id']).execute()
                         st.success("Supprimé")
+                        st.session_state.config_updater += 1
                         time.sleep(0.5)
                         st.rerun()
                     
