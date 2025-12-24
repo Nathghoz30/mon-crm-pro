@@ -47,10 +47,9 @@ if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
 if 'config_updater' not in st.session_state: st.session_state.config_updater = 0
 
-# --- FONCTION API SIRET (RESTAURÉE V56) ---
+# --- FONCTION API SIRET ---
 def get_siret_info(siret):
     try:
-        # Nettoyage du SIRET
         clean_siret = siret.replace(' ', '').replace('.', '')
         url = f"https://recherche-entreprises.api.gouv.fr/search?q={clean_siret}"
         res = requests.get(url)
@@ -60,16 +59,15 @@ def get_siret_info(siret):
                 ent = data['results'][0]
                 siege = ent.get('siege', {})
                 return {
-                    "NOM": ent.get('nom_complet'),
+                    "NOM": ent.get('nom_complet'), # Raison sociale
                     "ADRESSE": siege.get('adresse'),
                     "VILLE": siege.get('libelle_commune'),
-                    "CP": siege.get('code_postal'),
-                    "TVA": ent.get('numero_tva_intracommunautaire')
+                    "CP": siege.get('code_postal')
                 }
     except: return None
     return None
 
-# --- FONCTIONS UTILITAIRES ---
+# --- LOGIN & UTILS ---
 def login(email, password):
     msg_box = st.empty()
     login_success = False
@@ -176,7 +174,7 @@ if MY_ROLE in ["admin1", "super_admin"]: tabs_list.append("3. ⚙️ Configurati
 if MY_ROLE in ["admin1", "admin2", "super_admin"]: tabs_list.append("4. 👥 Utilisateurs")
 tabs = st.tabs(tabs_list)
 
-# ONGLET 1 : CRÉATION (CORRIGÉ V56 - SIRET & COPIE ADRESSE)
+# ONGLET 1 : CRÉATION
 with tabs[0]:
     st.header("Créer un dossier")
     acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
@@ -191,7 +189,7 @@ with tabs[0]:
             mod = next(c for c in cols if c['id'] == sel_id)
             f_id = st.session_state.form_reset_id
             
-            # --- BLOC SIRET (RESTAURÉ) ---
+            # --- AUTO FILL SIRET (CORRIGÉ V57 : CIBLAGE PRÉCIS) ---
             if any(f['type'] == "SIRET" for f in mod['fields']):
                 with st.expander("⚡ Remplissage Automatique par SIRET", expanded=True):
                     c_siret, c_btn = st.columns([3, 1])
@@ -200,14 +198,23 @@ with tabs[0]:
                         info = get_siret_info(siret_input)
                         if info:
                             st.success("Entreprise trouvée !")
-                            # On remplit le session_state pour les champs correspondants
                             for i, f in enumerate(mod['fields']):
                                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
                                 fn_lower = f['name'].lower()
                                 
-                                if f['type'] == 'SIRET': st.session_state[k] = siret_input
-                                elif "nom" in fn_lower or "raison" in fn_lower: st.session_state[k] = info['NOM']
-                                elif f['type'] == "Adresse" or ("adresse" in fn_lower and "travaux" not in fn_lower): st.session_state[k] = info['ADRESSE']
+                                # Logique stricte de remplissage
+                                if f['type'] == 'SIRET': 
+                                    st.session_state[k] = siret_input
+                                
+                                # Raison Sociale uniquement (Pas "Nom" tout court)
+                                elif f['type'] == 'Texte Court' and any(x in fn_lower for x in ['raison', 'sociale', 'société', 'entreprise']):
+                                    st.session_state[k] = info['NOM']
+                                
+                                # Adresse Siège uniquement (Pas "Installation" ou "Travaux")
+                                elif f['type'] == 'Adresse': 
+                                    st.session_state[k] = info['ADRESSE']
+                                
+                                # Code Postal / Ville (si champs séparés)
                                 elif "ville" in fn_lower: st.session_state[k] = info['VILLE']
                                 elif "cp" in fn_lower or "postal" in fn_lower: st.session_state[k] = info['CP']
                         else:
@@ -215,14 +222,11 @@ with tabs[0]:
 
             st.divider()
             data, f_map = {}, {}
-            
-            # Variable pour stocker l'adresse principale détectée
             detected_main_address = ""
 
             for i, f in enumerate(mod['fields']):
                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
                 
-                # Gestion des types
                 if f['type'] == "Section/Titre": 
                     st.markdown(f"**{f['name']}**")
                 
@@ -233,22 +237,30 @@ with tabs[0]:
                     data[f['name']] = st.text_area(f['name'], key=k)
                 
                 elif f['type'] == "Adresse":
-                    # On capture l'adresse principale pour la copie future
+                    # On capture la valeur pour la copie
                     val = st.text_input(f['name'], key=k)
                     data[f['name']] = val
-                    detected_main_address = val
+                    if val: detected_main_address = val # On garde la dernière adresse non vide
                 
                 elif f['type'] == "Adresse Travaux":
-                    # LOGIQUE DE COPIE RESTAURÉE & LECTURE SEULE
+                    # --- CORRECTIF COPIE (V57) ---
                     do_copy = st.checkbox(f"Copier l'adresse du siège pour {f['name']} ?", key=f"copy_{k}")
+                    
+                    # On détermine la valeur à afficher
                     if do_copy:
-                        # Si copie active : on affiche la valeur détectée et on désactive (disabled=True)
-                        data[f['name']] = st.text_input(f['name'], value=detected_main_address, disabled=True, key=k)
+                        # Si copie active, on force la valeur détectée
+                        final_val = detected_main_address
+                        disabled_state = True
                     else:
-                        data[f['name']] = st.text_input(f['name'], key=k)
+                        # Sinon on laisse le champs libre (ou vide)
+                        # On récupère ce qu'il y a dans le state si ça existe
+                        final_val = st.session_state.get(k, "")
+                        disabled_state = False
+                    
+                    # Le champ Text Input
+                    data[f['name']] = st.text_input(f['name'], value=final_val, disabled=disabled_state, key=k)
                 
                 else: 
-                    # Cas général (Texte Court, SIRET, etc.)
                     data[f['name']] = st.text_input(f['name'], key=k)
 
             if st.button("💾 ENREGISTRER", type="primary"):
