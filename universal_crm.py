@@ -189,7 +189,7 @@ with tabs[0]:
             mod = next(c for c in cols if c['id'] == sel_id)
             f_id = st.session_state.form_reset_id
             
-            # --- AUTO FILL SIRET (CORRIGÉ V57 : CIBLAGE PRÉCIS) ---
+            # --- AUTO FILL SIRET (V58: FILTRAGE STRICT) ---
             if any(f['type'] == "SIRET" for f in mod['fields']):
                 with st.expander("⚡ Remplissage Automatique par SIRET", expanded=True):
                     c_siret, c_btn = st.columns([3, 1])
@@ -202,19 +202,19 @@ with tabs[0]:
                                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
                                 fn_lower = f['name'].lower()
                                 
-                                # Logique stricte de remplissage
+                                # 1. SIRET
                                 if f['type'] == 'SIRET': 
                                     st.session_state[k] = siret_input
                                 
-                                # Raison Sociale uniquement (Pas "Nom" tout court)
+                                # 2. Raison Sociale (uniquement si mots clés présents)
                                 elif f['type'] == 'Texte Court' and any(x in fn_lower for x in ['raison', 'sociale', 'société', 'entreprise']):
                                     st.session_state[k] = info['NOM']
                                 
-                                # Adresse Siège uniquement (Pas "Installation" ou "Travaux")
+                                # 3. Adresse Siège (Type 'Adresse' uniquement, pas 'Travaux')
                                 elif f['type'] == 'Adresse': 
                                     st.session_state[k] = info['ADRESSE']
                                 
-                                # Code Postal / Ville (si champs séparés)
+                                # 4. CP / Ville
                                 elif "ville" in fn_lower: st.session_state[k] = info['VILLE']
                                 elif "cp" in fn_lower or "postal" in fn_lower: st.session_state[k] = info['CP']
                         else:
@@ -222,7 +222,16 @@ with tabs[0]:
 
             st.divider()
             data, f_map = {}, {}
-            detected_main_address = ""
+            
+            # --- PRÉ-RECHERCHE ADRESSE PRINCIPALE (V58) ---
+            # On cherche la valeur de l'adresse principale dans le session_state AVANT la boucle
+            # pour qu'elle soit dispo immédiatement pour la copie.
+            found_main_address = ""
+            for idx, fld in enumerate(mod['fields']):
+                if fld['type'] == "Adresse":
+                    addr_key = f"f_{mod['id']}_{idx}_{fld['name']}_{f_id}"
+                    found_main_address = st.session_state.get(addr_key, "")
+                    break 
 
             for i, f in enumerate(mod['fields']):
                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
@@ -237,28 +246,26 @@ with tabs[0]:
                     data[f['name']] = st.text_area(f['name'], key=k)
                 
                 elif f['type'] == "Adresse":
-                    # On capture la valeur pour la copie
-                    val = st.text_input(f['name'], key=k)
-                    data[f['name']] = val
-                    if val: detected_main_address = val # On garde la dernière adresse non vide
+                    # L'input standard (qui alimentera le session_state au prochain run)
+                    data[f['name']] = st.text_input(f['name'], key=k)
                 
                 elif f['type'] == "Adresse Travaux":
-                    # --- CORRECTIF COPIE (V57) ---
+                    # --- COPIE ADRESSE ROBUSTE (V58) ---
+                    # On affiche la checkbox
                     do_copy = st.checkbox(f"Copier l'adresse du siège pour {f['name']} ?", key=f"copy_{k}")
                     
-                    # On détermine la valeur à afficher
                     if do_copy:
-                        # Si copie active, on force la valeur détectée
-                        final_val = detected_main_address
-                        disabled_state = True
+                        # Si coché : on prend la valeur trouvée plus haut
+                        final_val = found_main_address
+                        is_disabled = True
                     else:
-                        # Sinon on laisse le champs libre (ou vide)
-                        # On récupère ce qu'il y a dans le state si ça existe
+                        # Si pas coché : on prend la valeur que l'utilisateur a pu saisir
+                        # (qui est stockée dans le session_state sous la clé k)
                         final_val = st.session_state.get(k, "")
-                        disabled_state = False
+                        is_disabled = False
                     
-                    # Le champ Text Input
-                    data[f['name']] = st.text_input(f['name'], value=final_val, disabled=disabled_state, key=k)
+                    # On affiche le champ avec la valeur forcée ou libre
+                    data[f['name']] = st.text_input(f['name'], value=final_val, disabled=is_disabled, key=k)
                 
                 else: 
                     data[f['name']] = st.text_input(f['name'], key=k)
