@@ -46,25 +46,38 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
 
-# --- FONCTION LOGIN (Celle qui fonctionne : V46/V48) ---
+# --- FONCTION LOGIN BLINDÉE (V53) ---
 def login(email, password):
+    msg_box = st.empty()
+    login_success = False # On utilise un drapeau de succès
+
     try:
+        # 1. Tentative de connexion
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
-            # Sécurité anti-double clic (boucle d'attente)
+            # 2. Boucle de sécurité (Anti-double clic)
             for _ in range(3):
                 p_res = supabase.table("profiles").select("*").eq("id", res.user.id).execute()
                 if p_res.data:
                     st.session_state.user = res.user
                     st.session_state.profile = p_res.data[0]
-                    st.success("✅ Connexion réussie !")
-                    time.sleep(0.5)
-                    st.rerun()
-                    return
+                    login_success = True # Succès confirmé !
+                    break
                 time.sleep(0.5)
-            st.error("Erreur : Profil introuvable.")
-    except:
-        st.error("Identifiants incorrects.")
+            
+            if not login_success:
+                msg_box.error("Erreur : Profil introuvable (Délai dépassé).")
+
+    except Exception as e:
+        # Ici, on ne tombe que si le mot de passe est faux ou erreur API
+        msg_box.error("Identifiants incorrects.")
+
+    # 3. Le rechargement se fait ICI, en dehors du piège à erreurs
+    # C'est la garantie absolue que le Vert ne deviendra jamais Rouge.
+    if login_success:
+        msg_box.success("✅ Connexion réussie !")
+        time.sleep(0.5)
+        st.rerun()
 
 def logout():
     supabase.auth.sign_out()
@@ -179,6 +192,8 @@ with tabs[0]:
                     data[fn] = [u for u in urls if u]
                 supabase.table("records").insert({"collection_id": mod['id'], "data": data, "created_by": st.session_state.user.id}).execute()
                 st.session_state.form_reset_id += 1
+                st.success("Dossier créé !")
+                time.sleep(1)
                 st.rerun()
 
 # ONGLET 2 : GESTION
@@ -203,6 +218,7 @@ with tabs[1]:
                                 else: new_d[f['name']] = st.text_input(f['name'], value=r['data'].get(f['name'], ""))
                         if st.form_submit_button("💾 Sauvegarder"):
                             supabase.table("records").update({"data": new_d}).eq("id", r['id']).execute()
+                            st.success("Sauvegardé")
                             st.rerun()
 
                     st.divider()
@@ -227,17 +243,21 @@ with tabs[1]:
                                     urls.append(pub)
                                     r['data'][fname] = urls
                                     supabase.table("records").update({"data": r['data']}).eq("id", r['id']).execute()
+                                    st.success("Ajouté")
+                                    time.sleep(1)
                                     st.rerun()
                     
-                    if all_urls and st.button("📄 TÉLÉCHARGER DOSSIER COMPLET (PDF)"):
+                    if all_urls and st.button("📄 PDF COMPLET"):
                         st.download_button("📥 Télécharger", merge_files_to_pdf(all_urls), f"Dossier_{r['id']}.pdf", "application/pdf")
                     
-                    if st.button("💀 Supprimer ce dossier", type="primary"):
+                    if st.button("💀 Supprimer", type="primary"):
                         supabase.table("records").delete().eq("id", r['id']).execute()
+                        st.success("Supprimé")
+                        time.sleep(1)
                         st.rerun()
             else: st.info("Aucun dossier.")
 
-# ONGLET 3 : CONFIGURATION (CORRECTIF V50)
+# ONGLET 3 : CONFIGURATION (OPTIMISÉ V52 - Affichage Immédiat)
 if "3. ⚙️ Configuration" in tabs_list:
     idx = tabs_list.index("3. ⚙️ Configuration")
     with tabs[idx]:
@@ -254,7 +274,7 @@ if "3. ⚙️ Configuration" in tabs_list:
             aid = next(a['id'] for a in acts if a['name'] == st.selectbox("Activité :", [a['name'] for a in acts]))
             type_list = ["Texte Court", "Texte Long", "SIRET", "Adresse", "Adresse Travaux", "Fichier/Image", "Section/Titre"]
             
-            # --- CRÉATION NOUVEAU MODÈLE ---
+            # CRÉATION MODÈLE
             with st.expander("➕ Créer Modèle"):
                 nm = st.text_input("Nom du modèle")
                 c1, c2, c3 = st.columns([3, 2, 1])
@@ -268,51 +288,57 @@ if "3. ⚙️ Configuration" in tabs_list:
                 
                 if "t" in st.session_state and st.session_state.t:
                     st.write(st.session_state.t)
-                    if st.button("💾 SAUVEGARDER LE MODÈLE"):
+                    if st.button("💾 SAUVEGARDER"):
                         supabase.table("collections").insert({"name": nm, "activity_id": aid, "fields": st.session_state.t}).execute()
                         st.session_state.t = []
-                        st.success("Modèle créé !")
-                        time.sleep(2) # Pause longue pour être sûr
+                        st.success("Créé !")
                         st.rerun()
 
-            # --- GESTION DES MODÈLES EXISTANTS (CORRECTIF V50 : ATTENTE) ---
-            for m in supabase.table("collections").select("*").eq("activity_id", aid).execute().data:
+            # GESTION EXISTANTE
+            # On force le rechargement depuis la DB à chaque cycle pour être sûr
+            models_data = supabase.table("collections").select("*").eq("activity_id", aid).execute().data
+            
+            for m in models_data:
                 with st.expander(f"📝 Gérer {m['name']}"):
                     st.markdown("#### Ajouter un champ")
-                    
                     ca1, ca2, ca3 = st.columns([3, 2, 1])
                     new_field_name = ca1.text_input("Nom", key=f"n_{m['id']}")
                     new_field_type = ca2.selectbox("Type", type_list, key=f"t_{m['id']}")
                     
                     if ca3.button("Ajouter", key=f"add_{m['id']}"):
                         if new_field_name:
-                            with st.spinner("Ajout du champ en cours..."):
-                                nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
-                                supabase.table("collections").update({"fields": nf}).eq("id", m['id']).execute()
-                                time.sleep(2.5) # PAUSE OBLIGATOIRE POUR SYNCHRO DB
-                            st.success("Champ ajouté !")
+                            # 1. On met à jour la DB
+                            nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
+                            supabase.table("collections").update({"fields": nf}).eq("id", m['id']).execute()
+                            
+                            # 2. On affiche un succès immédiat
+                            st.success("Champ ajouté ! Actualisation...")
+                            
+                            # 3. On force un délai MINIME mais suffisant
+                            time.sleep(1)
                             st.rerun()
                     
                     st.divider()
                     st.markdown("#### Trier / Supprimer")
+                    # On utilise directement les champs chargés
                     fl = [f"{f['name']} [{f['type']}]" for f in m['fields']]
                     sl = sort_items(fl, direction='vertical', key=f"s_{m['id']}")
                     
                     if st.button("💾 Valider l'ordre", key=f"sv_{m['id']}"):
                          nl = [next(f for f in m['fields'] if f"{f['name']} [{f['type']}]" == l) for l in sl]
                          supabase.table("collections").update({"fields": nl}).eq("id", m['id']).execute()
-                         st.success("Ordre mis à jour")
-                         time.sleep(1)
+                         st.success("Validé")
+                         time.sleep(0.5)
                          st.rerun()
                     
                     tr = st.multiselect("Supprimer :", [f['name'] for f in m['fields']], key=f"del_{m['id']}")
                     if tr and st.button("Confirmer suppression", key=f"c_{m['id']}"):
                         supabase.table("collections").update({"fields": [f for f in m['fields'] if f['name'] not in tr]}).eq("id", m['id']).execute()
                         st.success("Supprimé")
-                        time.sleep(1)
+                        time.sleep(0.5)
                         st.rerun()
                     
-                    if st.button("💀 Supprimer ce modèle", key=f"k_{m['id']}", type="primary"):
+                    if st.button("💀 Supprimer modèle", key=f"k_{m['id']}", type="primary"):
                          supabase.table("collections").delete().eq("id", m['id']).execute()
                          st.rerun()
 
@@ -338,6 +364,6 @@ if "4. 👥 Utilisateurs" in tabs_list:
                     if (MY_ROLE == "admin1") or (MY_ROLE == "admin2" and u['role'] == "user"):
                         if st.button(f"🗑️ Supprimer {u['email']}", key=f"d_{u['id']}", type="secondary"):
                             supabase.table("profiles").delete().eq("id", u['id']).execute()
-                            st.success("Utilisateur supprimé.")
+                            st.success("Supprimé")
                             time.sleep(0.5)
                             st.rerun()
