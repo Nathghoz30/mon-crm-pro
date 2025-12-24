@@ -59,7 +59,7 @@ def get_siret_info(siret):
                 ent = data['results'][0]
                 siege = ent.get('siege', {})
                 return {
-                    "NOM": ent.get('nom_complet'), # Raison sociale
+                    "NOM": ent.get('nom_complet'), 
                     "ADRESSE": siege.get('adresse'),
                     "VILLE": siege.get('libelle_commune'),
                     "CP": siege.get('code_postal')
@@ -189,7 +189,7 @@ with tabs[0]:
             mod = next(c for c in cols if c['id'] == sel_id)
             f_id = st.session_state.form_reset_id
             
-            # --- AUTO FILL SIRET (V59: FILTRAGE CHIRURGICAL) ---
+            # --- AUTO FILL SIRET (V59/V60 Strict) ---
             if any(f['type'] == "SIRET" for f in mod['fields']):
                 with st.expander("⚡ Remplissage Automatique par SIRET", expanded=True):
                     c_siret, c_btn = st.columns([3, 1])
@@ -202,21 +202,13 @@ with tabs[0]:
                                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
                                 fn_lower = f['name'].lower()
                                 
-                                # 1. SIRET : Toujours remplir
                                 if f['type'] == 'SIRET': 
                                     st.session_state[k] = siret_input
-                                
-                                # 2. Raison Sociale : UNIQUEMENT si mot clé explicite
-                                # On exclut explicitement les champs "nom" tout court
                                 elif f['type'] == 'Texte Court':
                                     if any(x in fn_lower for x in ['raison', 'sociale', 'société', 'entreprise']):
                                          st.session_state[k] = info['NOM']
-                                
-                                # 3. Adresse Siège : UNIQUEMENT Type 'Adresse' (Jamais Travaux/Install)
                                 elif f['type'] == 'Adresse': 
                                     st.session_state[k] = info['ADRESSE']
-                                
-                                # 4. CP / Ville
                                 elif "ville" in fn_lower: st.session_state[k] = info['VILLE']
                                 elif "cp" in fn_lower or "postal" in fn_lower: st.session_state[k] = info['CP']
                         else:
@@ -225,10 +217,8 @@ with tabs[0]:
             st.divider()
             data, f_map = {}, {}
             
-            # --- VARIABLE MÉMOIRE POUR LA COPIE ---
-            # Cette variable va se remplir quand on croisera le champ "Adresse"
-            # Et sera utilisée quand on croisera le champ "Adresse Travaux"
-            current_main_address = ""
+            # VARIABLE TAMPON
+            address_buffer = ""
 
             for i, f in enumerate(mod['fields']):
                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
@@ -243,24 +233,23 @@ with tabs[0]:
                     data[f['name']] = st.text_area(f['name'], key=k)
                 
                 elif f['type'] == "Adresse":
-                    # On affiche le champ
                     val = st.text_input(f['name'], key=k)
                     data[f['name']] = val
-                    # On sauvegarde la valeur EN DIRECT pour les champs suivants
-                    if val: current_main_address = val
+                    address_buffer = val # On capture la valeur
                 
                 elif f['type'] == "Adresse Travaux":
-                    # --- COPIE ADRESSE EN CASCADE (V59) ---
+                    # --- CORRECTIF V60 : FORÇAGE SESSION STATE ---
                     do_copy = st.checkbox(f"Copier l'adresse du siège pour {f['name']} ?", key=f"copy_{k}")
                     
                     if do_copy:
-                        # Si coché, on prend la valeur stockée juste avant
-                        final_val = current_main_address
-                        # On l'affiche grisée
-                        data[f['name']] = st.text_input(f['name'], value=final_val, disabled=True, key=k)
+                        # ON FORCE L'ÉCRITURE DANS LE SESSION STATE
+                        # C'est la seule façon d'obliger Streamlit à afficher la valeur
+                        st.session_state[k] = address_buffer
+                        # On affiche le champ en lecture seule
+                        data[f['name']] = st.text_input(f['name'], key=k, disabled=True)
                     else:
-                        # Sinon champ libre
-                        data[f['name']] = st.text_input(f['name'], key=k)
+                        # Champ libre
+                        data[f['name']] = st.text_input(f['name'], key=k, disabled=False)
                 
                 else: 
                     data[f['name']] = st.text_input(f['name'], key=k)
