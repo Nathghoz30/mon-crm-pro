@@ -47,11 +47,32 @@ if 'profile' not in st.session_state: st.session_state.profile = None
 if 'form_reset_id' not in st.session_state: st.session_state.form_reset_id = 0
 if 'config_updater' not in st.session_state: st.session_state.config_updater = 0
 
-# --- FONCTION LOGIN BLINDÉE (V53) ---
+# --- FONCTION API SIRET (RESTAURÉE V56) ---
+def get_siret_info(siret):
+    try:
+        # Nettoyage du SIRET
+        clean_siret = siret.replace(' ', '').replace('.', '')
+        url = f"https://recherche-entreprises.api.gouv.fr/search?q={clean_siret}"
+        res = requests.get(url)
+        if res.status_code == 200:
+            data = res.json()
+            if data['results']:
+                ent = data['results'][0]
+                siege = ent.get('siege', {})
+                return {
+                    "NOM": ent.get('nom_complet'),
+                    "ADRESSE": siege.get('adresse'),
+                    "VILLE": siege.get('libelle_commune'),
+                    "CP": siege.get('code_postal'),
+                    "TVA": ent.get('numero_tva_intracommunautaire')
+                }
+    except: return None
+    return None
+
+# --- FONCTIONS UTILITAIRES ---
 def login(email, password):
     msg_box = st.empty()
     login_success = False
-
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
@@ -63,10 +84,8 @@ def login(email, password):
                     login_success = True
                     break
                 time.sleep(0.5)
-            
             if not login_success:
                 msg_box.error("Erreur : Profil introuvable (Délai dépassé).")
-
     except Exception as e:
         msg_box.error("Identifiants incorrects.")
 
@@ -157,7 +176,7 @@ if MY_ROLE in ["admin1", "super_admin"]: tabs_list.append("3. ⚙️ Configurati
 if MY_ROLE in ["admin1", "admin2", "super_admin"]: tabs_list.append("4. 👥 Utilisateurs")
 tabs = st.tabs(tabs_list)
 
-# ONGLET 1 : CRÉATION (CORRIGÉ V55)
+# ONGLET 1 : CRÉATION (CORRIGÉ V56 - SIRET & COPIE ADRESSE)
 with tabs[0]:
     st.header("Créer un dossier")
     acts = supabase.table("activities").select("*").eq("company_id", MY_COMPANY_ID).execute().data
@@ -166,30 +185,71 @@ with tabs[0]:
         act_id = next(a['id'] for a in acts if a['name'] == act_sel)
         cols = supabase.table("collections").select("*").eq("activity_id", act_id).execute().data
         if cols:
-            # --- CORRECTIF CRASH DOUBLE ID ---
-            # 1. On prépare les options AVANT d'afficher le menu
-            # On ajoute l'ID pour gérer les doublons de nom (ex: "Test (1)", "Test (2)")
             opts = [f"{c['name']} (ID: {c['id']})" for c in cols]
             choice = st.selectbox("Modèle", opts, key="sel_model_creation")
-            
-            # 2. On retrouve le modèle correspondant
             sel_id = int(choice.split("(ID: ")[1][:-1])
             mod = next(c for c in cols if c['id'] == sel_id)
-            
             f_id = st.session_state.form_reset_id
+            
+            # --- BLOC SIRET (RESTAURÉ) ---
+            if any(f['type'] == "SIRET" for f in mod['fields']):
+                with st.expander("⚡ Remplissage Automatique par SIRET", expanded=True):
+                    c_siret, c_btn = st.columns([3, 1])
+                    siret_input = c_siret.text_input("Entrez le SIRET", key="auto_siret_in")
+                    if c_btn.button("Remplir"):
+                        info = get_siret_info(siret_input)
+                        if info:
+                            st.success("Entreprise trouvée !")
+                            # On remplit le session_state pour les champs correspondants
+                            for i, f in enumerate(mod['fields']):
+                                k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
+                                fn_lower = f['name'].lower()
+                                
+                                if f['type'] == 'SIRET': st.session_state[k] = siret_input
+                                elif "nom" in fn_lower or "raison" in fn_lower: st.session_state[k] = info['NOM']
+                                elif f['type'] == "Adresse" or ("adresse" in fn_lower and "travaux" not in fn_lower): st.session_state[k] = info['ADRESSE']
+                                elif "ville" in fn_lower: st.session_state[k] = info['VILLE']
+                                elif "cp" in fn_lower or "postal" in fn_lower: st.session_state[k] = info['CP']
+                        else:
+                            st.error("SIRET introuvable.")
+
             st.divider()
-            data, f_map, main_addr = {}, {}, ""
+            data, f_map = {}, {}
+            
+            # Variable pour stocker l'adresse principale détectée
+            detected_main_address = ""
+
             for i, f in enumerate(mod['fields']):
                 k = f"f_{mod['id']}_{i}_{f['name']}_{f_id}"
-                if f['type'] == "Section/Titre": st.markdown(f"**{f['name']}**")
-                elif f['type'] == "Fichier/Image": f_map[f['name']] = st.file_uploader(f['name'], accept_multiple_files=True, key=k)
-                elif f['type'] == "Texte Long": data[f['name']] = st.text_area(f['name'], key=k)
+                
+                # Gestion des types
+                if f['type'] == "Section/Titre": 
+                    st.markdown(f"**{f['name']}**")
+                
+                elif f['type'] == "Fichier/Image": 
+                    f_map[f['name']] = st.file_uploader(f['name'], accept_multiple_files=True, key=k)
+                
+                elif f['type'] == "Texte Long": 
+                    data[f['name']] = st.text_area(f['name'], key=k)
+                
+                elif f['type'] == "Adresse":
+                    # On capture l'adresse principale pour la copie future
+                    val = st.text_input(f['name'], key=k)
+                    data[f['name']] = val
+                    detected_main_address = val
+                
                 elif f['type'] == "Adresse Travaux":
-                    copy = st.checkbox(f"Copier adresse : {main_addr}", key=f"chk_{k}") if main_addr else False
-                    data[f['name']] = st.text_input(f['name'], value=main_addr if copy else "", key=k)
-                else:
+                    # LOGIQUE DE COPIE RESTAURÉE & LECTURE SEULE
+                    do_copy = st.checkbox(f"Copier l'adresse du siège pour {f['name']} ?", key=f"copy_{k}")
+                    if do_copy:
+                        # Si copie active : on affiche la valeur détectée et on désactive (disabled=True)
+                        data[f['name']] = st.text_input(f['name'], value=detected_main_address, disabled=True, key=k)
+                    else:
+                        data[f['name']] = st.text_input(f['name'], key=k)
+                
+                else: 
+                    # Cas général (Texte Court, SIRET, etc.)
                     data[f['name']] = st.text_input(f['name'], key=k)
-                    if f['type'] == "Adresse": main_addr = data[f['name']]
 
             if st.button("💾 ENREGISTRER", type="primary"):
                 for fn, fl in f_map.items():
@@ -214,7 +274,6 @@ with tabs[1]:
                 sel_label = st.selectbox("Choisir dossier", list(s_map.keys()))
                 if sel_label:
                     r = s_map[sel_label]
-                    
                     with st.form(f"edit_{r['id']}"):
                         new_d = r['data'].copy()
                         for f in r['collections']['fields']:
@@ -262,7 +321,7 @@ with tabs[1]:
                         st.rerun()
             else: st.info("Aucun dossier.")
 
-# ONGLET 3 : CONFIGURATION (CORRIGÉ V54 + V55)
+# ONGLET 3 : CONFIGURATION
 if "3. ⚙️ Configuration" in tabs_list:
     idx = tabs_list.index("3. ⚙️ Configuration")
     with tabs[idx]:
@@ -279,18 +338,15 @@ if "3. ⚙️ Configuration" in tabs_list:
             aid = next(a['id'] for a in acts if a['name'] == st.selectbox("Activité :", [a['name'] for a in acts]))
             type_list = ["Texte Court", "Texte Long", "SIRET", "Adresse", "Adresse Travaux", "Fichier/Image", "Section/Titre"]
             
-            # CRÉATION MODÈLE
             with st.expander("➕ Créer Modèle"):
                 nm = st.text_input("Nom du modèle")
                 c1, c2, c3 = st.columns([3, 2, 1])
                 fn = c1.text_input("Nom champ", key="new_fn")
                 ft = c2.selectbox("Type", type_list, key="new_ft")
-                
                 if c3.button("Ajouter à la liste", key="add_to_list"):
                     if "t" not in st.session_state: st.session_state.t = []
                     st.session_state.t.append({"name": fn, "type": ft})
                     st.rerun()
-                
                 if "t" in st.session_state and st.session_state.t:
                     st.write(st.session_state.t)
                     if st.button("💾 SAUVEGARDER"):
@@ -299,16 +355,13 @@ if "3. ⚙️ Configuration" in tabs_list:
                         st.success("Créé !")
                         st.rerun()
 
-            # GESTION EXISTANTE
             models_data = supabase.table("collections").select("*").eq("activity_id", aid).execute().data
-            
             for m in models_data:
                 with st.expander(f"📝 Gérer {m['name']}"):
                     st.markdown("#### Ajouter un champ")
                     ca1, ca2, ca3 = st.columns([3, 2, 1])
                     new_field_name = ca1.text_input("Nom", key=f"n_{m['id']}")
                     new_field_type = ca2.selectbox("Type", type_list, key=f"t_{m['id']}")
-                    
                     if ca3.button("Ajouter", key=f"add_{m['id']}"):
                         if new_field_name:
                             nf = m['fields'] + [{"name": new_field_name, "type": new_field_type}]
@@ -320,12 +373,9 @@ if "3. ⚙️ Configuration" in tabs_list:
                     
                     st.divider()
                     st.markdown("#### Trier / Supprimer")
-                    
                     fl = [f"{f['name']} [{f['type']}]" for f in m['fields']]
                     dynamic_key = f"sort_{m['id']}_{st.session_state.config_updater}"
-                    
                     sl = sort_items(fl, direction='vertical', key=dynamic_key)
-                    
                     if st.button("💾 Valider l'ordre", key=f"sv_{m['id']}"):
                          nl = [next(f for f in m['fields'] if f"{f['name']} [{f['type']}]" == l) for l in sl]
                          supabase.table("collections").update({"fields": nl}).eq("id", m['id']).execute()
@@ -333,7 +383,6 @@ if "3. ⚙️ Configuration" in tabs_list:
                          st.session_state.config_updater += 1
                          time.sleep(0.5)
                          st.rerun()
-                    
                     tr = st.multiselect("Supprimer :", [f['name'] for f in m['fields']], key=f"del_{m['id']}")
                     if tr and st.button("Confirmer suppression", key=f"c_{m['id']}"):
                         supabase.table("collections").update({"fields": [f for f in m['fields'] if f['name'] not in tr]}).eq("id", m['id']).execute()
@@ -341,7 +390,6 @@ if "3. ⚙️ Configuration" in tabs_list:
                         st.session_state.config_updater += 1
                         time.sleep(0.5)
                         st.rerun()
-                    
                     if st.button("💀 Supprimer modèle", key=f"k_{m['id']}", type="primary"):
                          supabase.table("collections").delete().eq("id", m['id']).execute()
                          st.rerun()
@@ -358,7 +406,6 @@ if "4. 👥 Utilisateurs" in tabs_list:
                 res = supabase.auth.sign_up({"email": ue, "password": up})
                 supabase.table("profiles").insert({"id": res.user.id, "email": ue, "company_id": MY_COMPANY_ID, "role": ur, "full_name": ue.split('@')[0]}).execute()
                 st.rerun()
-        
         st.divider()
         ul = supabase.table("profiles").select("*").eq("company_id", MY_COMPANY_ID).execute().data
         if ul:
