@@ -1,149 +1,224 @@
-🗂️ Universal CRM - Gestion de Dossiers Métier
-Application de CRM et de Gestion Électronique de Documents (GED) ultra-flexible, conçue pour gérer des dossiers clients, des chantiers ou des projets administratifs.
+# Mon CRM Pro — Gestion de Dossiers Métier
 
-Développé avec Python (Streamlit) et Supabase.
+Application de CRM et de Gestion Électronique de Documents (GED) **no-code**, conçue pour gérer des dossiers clients, des chantiers ou tout projet administratif. La structure des formulaires se configure entièrement via l'interface — sans toucher au code.
 
-✨ Fonctionnalités Principales
-🏗️ 1. Architecture Flexible (No-Code)
-Structure dynamique : Créez vos propres modèles de dossiers via l'interface Admin.
+Développé avec **Python**, **Streamlit** et **Supabase**.
 
-Organisation par Sections : Découpez vos formulaires en blocs visuels (ex: "1. Contact", "2. Technique", "3. Documents").
+---
 
-Typage fort : Champs Texte, Nombre, Date, Email, Téléphone, Oui/Non...
+## Fonctionnalités principales
 
-⚡ 2. Saisie Intelligente & Automatisée
-API SIRET (Gouv.fr) : Remplissage automatique des infos société (Nom, Adresse complète, Ville, CP) via le numéro SIRET.
+### Architecture flexible (No-Code)
+- **Modèles dynamiques** : créez vos propres structures de dossiers depuis l'interface Admin
+- **Organisation par sections** : découpez vos formulaires en blocs visuels (ex : `1. Contact`, `2. Technique`, `3. Documents`)
+- **Réorganisation Drag & Drop** : changez l'ordre des champs sans toucher au code
 
-Adresse Intelligente : Case à cocher "Adresse identique" pour copier instantanément l'adresse du siège vers l'adresse de travaux.
+### Saisie intelligente & automatisée
+- **API SIRET (Gouv.fr)** : remplissage automatique du nom, de l'adresse, de la ville et du code postal depuis le numéro SIRET
+- **Adresse intelligente** : case à cocher "Adresse identique" pour copier l'adresse du siège vers l'adresse de chantier
+- **Interface réactive** : formulaire fluide sans rechargement excessif
 
-Interface Réactive : Formulaire fluide sans rechargement excessif.
+### Gestion documentaire avancée (GED)
+- **Upload multi-fichiers** : glisser-déposer plusieurs documents en une seule fois
+- **Stockage sécurisé** : fichiers hébergés sur Supabase Storage
+- **Fusion PDF** : regroupement automatique de tous les fichiers (JPG, PNG, PDF) d'un dossier en un seul PDF téléchargeable
 
-📂 3. Gestion Documentaire Avancée (GED)
-Upload Multi-fichiers : Glisser-déposer plusieurs documents d'un coup.
+### Multi-tenant & Gestion des accès
+- **Multi-entreprises** : chaque entreprise dispose de ses propres données, totalement isolées
+- **4 niveaux de rôles** : `super_admin`, `admin1`, `admin2`, `user`
+- **Authentification** : connexion sécurisée via Supabase Auth
 
-Visualisation : Liste claire des fichiers par dossier avec liens de téléchargement.
+---
 
-Fusion PDF 🖨️ : Bouton magique pour fusionner tous les documents d'un dossier (Images JPG/PNG + PDFs) en un seul fichier PDF complet.
+## Matrice des droits
 
-🛠️ 4. Administration Totale
-Éditeur de Structure : Réorganisez l'ordre des champs par simple Drag & Drop.
+| Rôle          | Créer un dossier | Gérer les dossiers | Configuration | Gestion utilisateurs | Ajouter des utilisateurs | Supprimer des utilisateurs |
+|---------------|:-:|:-:|:-:|:-:|---|---|
+| `super_admin` | ✅ | ✅ | ✅ | ✅ | Tous les rôles | Tous les utilisateurs |
+| `admin1`      | ✅ | ✅ | ✅ | ✅ | `admin2`, `user` | `admin2`, `user` |
+| `admin2`      | ✅ | ✅ | ❌ | ✅ | `user` uniquement | `user` uniquement |
+| `user`        | ✅ | ✅ | ❌ | ❌ | — | — |
 
-Modification à la volée : Renommez des champs ou changez leur section sans toucher au code.
+> Le `super_admin` peut également switcher entre les entreprises depuis l'interface.
 
-🚀 Installation Locale
-Pré-requis
-Python 3.9 ou plus
+---
 
-Un compte Supabase (Gratuit)
+## Types de champs disponibles
 
-1. Cloner le projet
-Bash
+| Type              | Rendu dans le formulaire                              |
+|-------------------|-------------------------------------------------------|
+| `Texte Court`     | Champ texte simple                                    |
+| `Texte Long`      | Zone de texte multiligne                              |
+| `SIRET`           | Champ texte + bouton de recherche API Gouv.fr         |
+| `Adresse`         | Champ texte — capturé pour copie automatique          |
+| `Adresse Travaux` | Champ texte + case à cocher "Adresse identique"       |
+| `Fichier/Image`   | Upload multi-fichiers → Supabase Storage              |
+| `Section/Titre`   | En-tête visuel (non stocké en base)                   |
 
-git clone https://github.com/votre-pseudo/mon-crm-pro.git
+---
+
+## Installation locale
+
+### Pré-requis
+
+- Python 3.9+
+- Un compte [Supabase](https://supabase.com) (gratuit)
+
+### 1. Cloner le projet
+
+```bash
+git clone https://github.com/Nathghoz30/mon-crm-pro.git
 cd mon-crm-pro
-2. Installer les dépendances
-Bash
+```
 
+### 2. Installer les dépendances
+
+```bash
 pip install -r requirements.txt
-Contenu du requirements.txt :
+```
 
-Plaintext
+Dépendances utilisées :
 
-streamlit
-supabase
-pandas
-requests
-streamlit-sortables
-pypdf
-Pillow
-3. Configurer les Secrets
-Créez un dossier .streamlit et un fichier secrets.toml à l'intérieur :
+| Package                      | Rôle                                          |
+|------------------------------|-----------------------------------------------|
+| `streamlit`                  | Interface web                                 |
+| `supabase`                   | Client Supabase (Auth, BDD, Storage)          |
+| `pandas`                     | Affichage tableau (gestion utilisateurs)      |
+| `requests`                   | Appels HTTP (API SIRET, téléchargement fichiers) |
+| `streamlit-sortables`        | Drag & Drop pour l'ordre des champs           |
+| `pypdf`                      | Fusion de PDFs                                |
+| `Pillow`                     | Conversion images → PDF                       |
+| `extra-streamlit-components` | Gestionnaire de cookies (persistance session) |
 
-Ini, TOML
+### 3. Configurer les secrets Supabase
 
-# .streamlit/secrets.toml
+Créez le fichier `.streamlit/secrets.toml` (**ne pas versionner ce fichier**) :
+
+```toml
 SUPABASE_URL = "https://votre-projet.supabase.co"
 SUPABASE_KEY = "votre-cle-anon-public"
-4. Lancer l'application
-Bash
+```
 
+### 4. Lancer l'application
+
+```bash
 streamlit run universal_crm.py
-🗄️ Configuration Base de Données (Supabase)
-Pour que l'application fonctionne, vous devez exécuter ce script SQL dans l'interface SQL Editor de Supabase :
+```
 
-SQL
+L'application est disponible sur `http://localhost:8501`.
 
--- 1. Nettoyage (Attention : supprime les données existantes)
-DROP TABLE IF EXISTS records CASCADE;
-DROP TABLE IF EXISTS collections CASCADE;
-DROP TABLE IF EXISTS activities CASCADE;
+---
 
--- 2. Table Activités (Le dossier parent global)
+## Configuration de la base de données (Supabase)
+
+Exécutez ce script SQL dans l'**SQL Editor** de Supabase pour créer les tables nécessaires :
+
+```sql
+-- 1. Table des entreprises (multi-tenant)
+CREATE TABLE companies (
+    id         BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    name       TEXT NOT NULL
+);
+
+-- 2. Profils utilisateurs (liés à Supabase Auth)
+CREATE TABLE profiles (
+    id          UUID PRIMARY KEY,   -- correspond à auth.users.id
+    email       TEXT,
+    company_id  BIGINT REFERENCES companies(id),
+    role        TEXT,               -- 'super_admin' | 'admin1' | 'admin2' | 'user'
+    full_name   TEXT
+);
+
+-- 3. Activités (catégories parentes par entreprise)
 CREATE TABLE activities (
-    id bigint generated by default as identity primary key,
-    name text not null unique,
-    created_at timestamp with time zone default timezone('utc'::text, now())
+    id          BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    company_id  BIGINT REFERENCES companies(id),
+    created_at  TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
 
--- 3. Table Collections (Les Modèles de dossier)
+-- 4. Collections (modèles de dossiers)
 CREATE TABLE collections (
-    id bigint generated by default as identity primary key,
-    name text not null,
-    fields jsonb not null, -- Stocke la configuration (sections, types, noms)
-    activity_id bigint references activities(id) on delete cascade,
-    created_at timestamp with time zone default timezone('utc'::text, now())
+    id          BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    name        TEXT NOT NULL,
+    fields      JSONB NOT NULL,     -- tableau de définitions de champs
+    activity_id BIGINT REFERENCES activities(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
 
--- 4. Table Records (Les Dossiers remplis)
+-- 5. Dossiers (données saisies par les utilisateurs)
 CREATE TABLE records (
-    id bigint generated by default as identity primary key,
-    collection_id bigint references collections(id) on delete cascade,
-    data jsonb not null, -- Stocke toutes les valeurs du dossier
-    created_at timestamp with time zone default timezone('utc'::text, now())
+    id             BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    collection_id  BIGINT REFERENCES collections(id) ON DELETE CASCADE,
+    data           JSONB NOT NULL,  -- dict { nom_du_champ: valeur }
+    created_by     UUID,            -- id de l'utilisateur Supabase Auth
+    created_at     TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
-Configuration du Storage :
+```
 
-Créez un Bucket nommé fichiers.
+### Configuration du Storage
 
-Ajoutez une Policy "Public" : Autorisez SELECT, INSERT, UPDATE, DELETE pour tout le monde (ou authentifié selon vos besoins).
+1. Dans Supabase, allez dans **Storage** et créez un bucket nommé **`fichiers`**
+2. Rendez le bucket **public**
+3. Ajoutez des policies autorisant `SELECT`, `INSERT`, `UPDATE`, `DELETE` selon vos besoins (public ou authentifié)
 
-📖 Guide d'Utilisation Rapide
-Étape 1 : Configuration (Admin)
-Allez dans l'onglet 3. Configuration (Admin).
+---
 
-Créez une Activité (ex: "Rénovation").
+## Guide d'utilisation rapide
 
-Créez un Modèle (ex: "Dossier Client").
+### Étape 1 — Configuration (Admin)
 
-Ajoutez vos champs en précisant bien la Section (ex: "1. Contact", "2. Documents").
+1. Allez dans l'onglet **3. Configuration**
+2. Créez une **Activité** (ex : `Rénovation`)
+3. Créez un **Modèle de dossier** (ex : `Dossier Client`)
+4. Ajoutez les **champs** en choisissant leur type et leur section
 
-Astuce : Utilisez le type Adresse pour le siège et Adresse Travaux pour le chantier afin d'activer la copie intelligente.
+> **Astuce :** utilisez le type `Adresse` pour le siège social et `Adresse Travaux` pour le chantier afin d'activer la copie automatique.
 
-Étape 2 : Création de Dossier
-Allez dans 1. Nouveau Dossier.
+### Étape 2 — Créer un dossier
 
-Si vous avez un champ SIRET, entrez le numéro et cliquez sur 🔍.
+1. Allez dans l'onglet **1. Nouveau Dossier**
+2. Si un champ SIRET est présent, saisissez le numéro et cliquez sur **Rechercher**
+3. Remplissez les champs et déposez vos fichiers
+4. Cliquez sur **Enregistrer**
 
-Remplissez le reste et glissez vos fichiers.
+### Étape 3 — Gérer & Exporter
 
-Cliquez sur Enregistrer.
+1. Allez dans l'onglet **2. Gestion des Dossiers**
+2. Recherchez un dossier par nom ou filtre
+3. Modifiez les informations ou ajoutez des fichiers
+4. Cliquez sur **Télécharger le Dossier Complet (PDF)** pour obtenir un PDF fusionnant toutes les pièces jointes
 
-Étape 3 : Gestion & Export
-Allez dans 2. Gestion des Dossiers.
+---
 
-Recherchez un dossier.
+## Déploiement sur Streamlit Cloud
 
-Modifiez les infos ou ajoutez des fichiers.
+1. Hébergez ce dépôt sur GitHub
+2. Connectez-vous sur [share.streamlit.io](https://share.streamlit.io)
+3. Déployez le dépôt en sélectionnant `universal_crm.py` comme fichier principal
+4. Dans **Advanced Settings**, renseignez vos secrets :
 
-Cliquez sur "📥 Télécharger le Dossier Complet (PDF)" pour obtenir une fusion de toutes les pièces jointes.
+```toml
+SUPABASE_URL = "https://votre-projet.supabase.co"
+SUPABASE_KEY = "votre-cle-anon-public"
+```
 
-☁️ Déploiement (Streamlit Cloud)
-Hébergez ce code sur GitHub.
+---
 
-Connectez-vous sur share.streamlit.io.
+## Structure du projet
 
-Déployez le repo.
+```
+mon-crm-pro/
+├── universal_crm.py     # Application complète (fichier unique)
+├── requirements.txt     # Dépendances Python
+├── README.md            # Documentation
+└── LICENSE              # Licence MIT
+```
 
-Dans les Advanced Settings de Streamlit Cloud, collez le contenu de vos secrets (URL et KEY Supabase) dans la zone dédiée.
+---
 
-Auteur : Nathan Ghozlan Licence : MIT
+## Auteur & Licence
+
+Développé par **Nathan Ghozlan** — [GitHub @Nathghoz30](https://github.com/Nathghoz30)
+
+Licence **MIT** — libre d'utilisation, de modification et de distribution.
